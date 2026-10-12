@@ -82,6 +82,18 @@ CREATE TABLE IF NOT EXISTS payees (
   name TEXT NOT NULL
 );
 
+-- Comentario que acompaña al informe (hoja 1). Va ligado al período real del informe y a las
+-- cuentas filtradas (scope: '' = todas; si no, ids ordenados separados por coma).
+CREATE TABLE IF NOT EXISTS report_notes (
+  scope TEXT NOT NULL,
+  from_date TEXT NOT NULL,
+  to_date TEXT NOT NULL,
+  text TEXT NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (scope, from_date, to_date)
+);
+
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,

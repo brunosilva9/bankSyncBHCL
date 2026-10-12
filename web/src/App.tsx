@@ -8,6 +8,8 @@ import { PayrollPage } from './pages/PayrollPage';
 import { ReportPage } from './pages/ReportPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { href, useRoute } from './router';
+import { useTheme } from './theme';
+import { ThemeToggle } from './components/ThemeToggle';
 
 const NAV = [
   { path: '/informe', label: 'Informe' },
@@ -19,7 +21,10 @@ const NAV = [
 
 export function App() {
   const [user, setUser] = useState<string | null | undefined>(undefined);
+  const [menuOpen, setMenuOpen] = useState(false);
   const route = useRoute();
+  const theme = useTheme();
+  const logo = theme === 'dark' ? '/icon-dark.svg' : '/icon.svg';
 
   useEffect(() => {
     setUnauthorizedHandler(() => setUser(null));
@@ -28,6 +33,24 @@ export function App() {
       .then((r) => setUser(r.username))
       .catch(() => setUser(null));
   }, []);
+
+  // El menú móvil se cierra al navegar y con Escape o un toque afuera.
+  useEffect(() => setMenuOpen(false), [route.path]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false);
+    };
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement).closest('.topbar')) setMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onDown);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onDown);
+    };
+  }, [menuOpen]);
 
   if (user === undefined) return null;
   if (user === null) return <LoginPage onLogin={setUser} />;
@@ -40,17 +63,34 @@ export function App() {
   return (
     <DataProvider>
       <header className="topbar no-print">
-        <strong className="brand">SyncBanks</strong>
-        <nav>
-          {NAV.map((n) => (
-            <a key={n.path} href={href(n.path)} className={route.path === n.path ? 'active' : ''}>
-              {n.label}
-            </a>
-          ))}
-        </nav>
-        <span className="user">
-          {user} · <button className="link" onClick={logout}>Salir</button>
-        </span>
+        <a className="brand" href={href('/informe')} title="Ir al informe">
+          <img className="brand-logo" src={logo} alt="" />
+          <span>SyncBanks</span>
+        </a>
+        <button
+          type="button"
+          className="topbar-menu-btn"
+          aria-label={menuOpen ? 'Cerrar menú' : 'Abrir menú'}
+          aria-expanded={menuOpen}
+          aria-controls="topbar-menu"
+          onClick={() => setMenuOpen((o) => !o)}
+        >
+          <span className="bars" aria-hidden="true" />
+        </button>
+        <div id="topbar-menu" className={menuOpen ? 'topbar-collapse open' : 'topbar-collapse'}>
+          <nav>
+            {NAV.map((n) => (
+              <a key={n.path} href={href(n.path)} className={route.path === n.path ? 'active' : ''}>
+                {n.label}
+              </a>
+            ))}
+          </nav>
+          <span className="user">
+            <span>{user}</span>
+            <button className="link" onClick={logout}>Salir</button>
+          </span>
+        </div>
+        <ThemeToggle />
       </header>
       <main>
         {route.path === '/movimientos' && <MovementsPage params={route.params} />}

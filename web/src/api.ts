@@ -203,4 +203,15 @@ export interface Report {
   payroll: Array<{ accountId: number; accountName: string; date: string; batch: number; batchesInDay: number; total: number; count: number }>;
   uncategorizedCount: number;
   warnings: string[];
+  /** Comentario guardado para este período y estas cuentas. */
+  note: ReportNote | null;
 }
+
+export interface ReportNote {
+  text: string;
+  updated_at: string;
+  username: string | null;
+}
+
+/** Igual que en el servidor: unas 4 líneas, para que el resumen siga en una página. */
+export const NOTE_MAX = 500;

@@ -53,6 +53,8 @@ Al final se verifica que el saldo de cada cartola calce con los movimientos carg
 - **Etiqueta**: texto libre, por ejemplo «Gastos Pedro». Sirve para agrupar gastos que cruzan categorías.
 - **Reglas**: al cambiar la categoría o la etiqueta de un movimiento, la app ofrece aplicarla a todos los de esa contraparte y a los de próximas cartolas. Las ediciones manuales nunca se pisan.
 
+Se puede categorizar y etiquetar directamente desde el informe (hojas *Entradas* y *Gastos*, en pantalla; al imprimir no aparecen los controles de edición).
+
 ### Pago Fácil (nómina)
 
 En la cartola aparece como una línea por trabajador (`Pago Fácil Bch: <RUT>`). La app las agrupa en un **lote de nómina** por día y cuenta. En *Configuración → Trabajadores* se le puede poner nombre a cada RUT.

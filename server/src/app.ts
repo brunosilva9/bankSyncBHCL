@@ -53,6 +53,17 @@ function intOrNull(v: unknown, field: string): number | null {
   return v;
 }
 
+/** Ids de cuenta desde "1,2" (query) o [1, 2] (body). */
+function parseAccountIds(v: unknown): number[] {
+  const parts = Array.isArray(v) ? v : String(v ?? '').split(',');
+  return parts.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+}
+
+const noteScope = (accountIds: number[]) => [...new Set(accountIds)].sort((a, b) => a - b).join(',');
+
+/** Largo máximo del comentario: unas 4 líneas, para que el resumen siga cabiendo en una página. */
+const NOTE_MAX = 500;
+
 export function createApp(db: DB, opts: AppOptions) {
   const app = express();
   app.disable('x-powered-by');
@@ -358,12 +369,36 @@ export function createApp(db: DB, opts: AppOptions) {
     const from = String(req.query.from ?? '');
     const to = String(req.query.to ?? '');
     if (!DATE.test(from) || !DATE.test(to) || from > to) throw bad('Rango de fechas inválido');
-    const accountIds = String(req.query.accounts ?? '')
-      .split(',')
-      .filter(Boolean)
-      .map(Number);
-    res.json(buildReport(db, { from, to, accountIds }));
+    const accountIds = parseAccountIds(req.query.accounts);
+    const report = buildReport(db, { from, to, accountIds });
+    res.json({ ...report, note: getNote(noteScope(accountIds), report.period.from, report.period.to) });
   });
+
+  // Comentario del informe: se guarda para el período real que muestra el informe (report.period).
+  api.put('/report-note', (req: AuthedRequest, res) => {
+    const from = String(req.body.from ?? '');
+    const to = String(req.body.to ?? '');
+    if (!DATE.test(from) || !DATE.test(to) || from > to) throw bad('Rango de fechas inválido');
+    const scope = noteScope(parseAccountIds(req.body.accounts));
+    const text = str(req.body.text, 'comentario', { optional: true, max: NOTE_MAX });
+    if (text) {
+      db.prepare(
+        `INSERT INTO report_notes (scope, from_date, to_date, text, user_id) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(scope, from_date, to_date) DO UPDATE SET text = excluded.text, user_id = excluded.user_id, updated_at = datetime('now')`,
+      ).run(scope, from, to, text, req.user!.id);
+    } else {
+      db.prepare('DELETE FROM report_notes WHERE scope = ? AND from_date = ? AND to_date = ?').run(scope, from, to);
+    }
+    res.json(getNote(scope, from, to));
+  });
+
+  const getNote = (scope: string, from: string, to: string) =>
+    db
+      .prepare(
+        `SELECT n.text, n.updated_at, u.username FROM report_notes n LEFT JOIN users u ON u.id = n.user_id
+         WHERE n.scope = ? AND n.from_date = ? AND n.to_date = ?`,
+      )
+      .get(scope, from, to) ?? null;
 
   api.get('/integrity', (_req, res) => res.json({ warnings: checkBalances(db) }));
 

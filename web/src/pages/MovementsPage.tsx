@@ -163,8 +163,8 @@ export function MovementsPage({ params }: { params: Record<string, string> }) {
       {selected.size > 0 && (
         <div className="bulkbar">
           <strong>{selected.size} seleccionados</strong>
-          <CategorySelect value={null} placeholder="Asignar categoría…" onChange={(categoryId) => editMany([...selected], { categoryId })} />
           <LabelInput value="" placeholder="Asignar etiqueta…" onCommit={(label) => label && editMany([...selected], { label })} />
+          <CategorySelect value={null} placeholder="Asignar categoría…" onChange={(categoryId) => editMany([...selected], { categoryId })} />
           <button onClick={() => setSelected(new Set())}>Quitar selección</button>
         </div>
       )}
@@ -180,8 +180,8 @@ export function MovementsPage({ params }: { params: Record<string, string> }) {
               <th className="num">Cargo</th>
               <th className="num">Abono</th>
               <th className="num">Saldo</th>
-              <th>Categoría</th>
               <th>Etiqueta</th>
+              <th>Categoría</th>
             </tr>
           </thead>
           <tbody>
@@ -268,10 +268,10 @@ function MovementRow({ m, selected, onSelect, onEdit, nested }: { m: Movement; s
       <td className="num pos">{m.direction === 'A' ? clp(m.amount) : ''}</td>
       <td className="num muted small">{clp(m.balance_after)}</td>
       <td>
-        <CategorySelect value={m.category_id} source={m.category_source} onChange={(categoryId) => onEdit({ categoryId })} />
+        <LabelInput value={m.label ?? ''} fromRule={m.label_source === 'rule'} onCommit={(label) => onEdit({ label })} />
       </td>
       <td>
-        <LabelInput value={m.label ?? ''} fromRule={m.label_source === 'rule'} onCommit={(label) => onEdit({ label })} />
+        <CategorySelect value={m.category_id} source={m.category_source} onChange={(categoryId) => onEdit({ categoryId })} />
       </td>
     </tr>
   );
@@ -311,10 +311,10 @@ function BatchRows(props: {
         <td />
         <td className="num muted small">{clp(first.balance_after)}</td>
         <td>
-          <CategorySelect value={categoryIds.size === 1 ? first.category_id : null} placeholder="(varias)" onChange={(categoryId) => props.onEditAll({ categoryId })} />
+          <LabelInput value={labels.size === 1 ? (first.label ?? '') : ''} placeholder={labels.size > 1 ? '(varias)' : ''} onCommit={(label) => props.onEditAll({ label })} />
         </td>
         <td>
-          <LabelInput value={labels.size === 1 ? (first.label ?? '') : ''} placeholder={labels.size > 1 ? '(varias)' : ''} onCommit={(label) => props.onEditAll({ label })} />
+          <CategorySelect value={categoryIds.size === 1 ? first.category_id : null} placeholder="(varias)" onChange={(categoryId) => props.onEditAll({ categoryId })} />
         </td>
       </tr>
       {open &&

@@ -1,5 +1,7 @@
-import { useEffect, useMemo, type ReactNode } from 'react';
-import { qs, type Category, type Movement, type Report } from '../api';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { api, qs, type Category, type Movement, type Report } from '../api';
+import { CategorySelect } from '../components/CategorySelect';
+import { LabelInput } from '../components/LabelInput';
 import { RangePicker } from '../components/RangePicker';
 import { useFetch, useShared } from '../data';
 import { clp, clpSigned, presetRange, shortDate, type DateRange } from '../format';
@@ -7,7 +9,8 @@ import { chronological, groupByCategory, movementTitle, periodText, reportFileNa
 import { href, navigate } from '../router';
 
 // El informe tiene tres hojas: Resumen (siempre una sola página), Entradas y Gastos.
-// En pantalla se ve una a la vez; al imprimir salen las tres, cada una en su página.
+// En pantalla se muestran las tres apiladas (las pestañas saltan a cada una); al imprimir
+// salen las tres, cada una en su página.
 const SHEETS = [
   { key: 'resumen', label: 'Resumen' },
   { key: 'entradas', label: 'Entradas' },
@@ -17,19 +20,69 @@ type SheetKey = (typeof SHEETS)[number]['key'];
 
 type LinkFn = (p: Record<string, string | number | null | undefined>) => string;
 
+/** Edición de categoría o etiqueta de un movimiento, igual que en Movimientos. */
+type Edit = { categoryId?: number | null | 'auto'; label?: string | null };
+
 export function ReportPage({ params }: { params: Record<string, string> }) {
-  const { accounts, categories } = useShared();
+  const { accounts, categories, reload: reloadShared } = useShared();
   const range: DateRange = params.from && params.to ? { from: params.from, to: params.to } : presetRange('friday');
   const accountId = params.account ?? '';
-  const sheet: SheetKey = SHEETS.some((s) => s.key === params.hoja) ? (params.hoja as SheetKey) : 'resumen';
+  // Las tres hojas se muestran apiladas; la navegación salta a cada una.
+  const [activeSheet, setActiveSheet] = useState<SheetKey>('resumen');
+  // En móvil la navegación se pliega tras una flecha flotante para no tapar el contenido.
+  const [navOpen, setNavOpen] = useState(false);
 
-  const setFilters = (patch: Record<string, string | undefined>) => navigate('/informe', { ...range, account: accountId, hoja: sheet, ...patch }, true);
+  const setFilters = (patch: Record<string, string | undefined>) => navigate('/informe', { ...range, account: accountId, ...patch }, true);
+  const goToSheet = (key: SheetKey) => {
+    setNavOpen(false);
+    document.getElementById(`hoja-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
-  const { data: report, error, loading } = useFetch<Report>(`/api/report${qs({ ...range, accounts: accountId })}`);
+  const { data: report, error, loading, refresh: refreshReport } = useFetch<Report>(`/api/report${qs({ ...range, accounts: accountId })}`);
   // Mismo criterio que el informe: sin traspasos internos ni giros/amortizaciones de la línea.
   const detail = { ...range, accountId, excludeInternal: 1, limit: 5000 };
   const income = useFetch<Movement[]>(`/api/movements${qs({ ...detail, direction: 'A' })}`);
   const expenses = useFetch<Movement[]>(`/api/movements${qs({ ...detail, direction: 'C' })}`);
+
+  // Edición desde el informe: se aplica en pantalla al instante y recién se reconsulta
+  // el resumen para mantener al día, por ejemplo, el conteo de movimientos sin categoría.
+  const saveEdit = async (m: Movement, edit: Edit) => {
+    const list = m.direction === 'A' ? income : expenses;
+    list.setData((prev) =>
+      (prev ?? []).map((x) =>
+        x.id === m.id
+          ? {
+              ...x,
+              ...(edit.categoryId !== undefined && edit.categoryId !== 'auto' ? { category_id: edit.categoryId, category_source: 'manual' as const } : {}),
+              ...(edit.label !== undefined ? { label: edit.label, label_source: edit.label ? ('manual' as const) : null } : {}),
+            }
+          : x,
+      ),
+    );
+    await api.patch(`/api/movements/${m.id}`, edit);
+    if (edit.label) reloadShared();
+    if (edit.categoryId === 'auto' || edit.label === null) list.refresh();
+    refreshReport();
+  };
+
+  // Las nóminas solo salen en Gastos; la edición se aplica al lote completo.
+  const saveEditAll = async (ids: number[], edit: Edit) => {
+    expenses.setData((prev) =>
+      (prev ?? []).map((m) =>
+        ids.includes(m.id)
+          ? {
+              ...m,
+              ...(edit.categoryId !== undefined && edit.categoryId !== 'auto' ? { category_id: edit.categoryId, category_source: 'manual' as const } : {}),
+              ...(edit.label !== undefined ? { label: edit.label, label_source: edit.label ? ('manual' as const) : null } : {}),
+            }
+          : m,
+      ),
+    );
+    await api.post('/api/movements/bulk', { ids, ...edit });
+    if (edit.label) reloadShared();
+    expenses.refresh();
+    refreshReport();
+  };
 
   const movementsLink: LinkFn = (extra) => href('/movimientos', { from: range.from, to: range.to, accountId: accountId || undefined, ...extra });
   const scopeName = accountId ? (accounts.find((a) => String(a.id) === accountId)?.name ?? 'Cuenta') : 'Todas las cuentas';
@@ -45,15 +98,33 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
     };
   }, [period.from, period.to, scopeName]);
 
+  // Resalta en las pestañas la hoja que se está viendo mientras se hace scroll.
+  useEffect(() => {
+    if (!report) return;
+    const sections = SHEETS.map((s) => document.getElementById(`hoja-${s.key}`)).filter((el): el is HTMLElement => el !== null);
+    if (sections.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const [visible] = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
+        if (visible) setActiveSheet(visible.target.id.replace('hoja-', '') as SheetKey);
+      },
+      { rootMargin: '-30% 0px -60% 0px' },
+    );
+    sections.forEach((s) => observer.observe(s));
+    return () => observer.disconnect();
+  }, [report]);
+
   const header = (n: number, title: string) => (
     <header className="sheet-header">
-      <h1>
-        {title} {periodText(period)} <small className="muted">· Hoja {n} de 3</small>
-      </h1>
-      <p className="muted">
-        {scopeName}
-        <br />
-        <small>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h1>
+          {title} <span className="muted sheet-period">{periodText(period)}</span>
+        </h1>
+        <span className="sheet-badge">Hoja {n} de 3</span>
+      </div>
+      <p className="sheet-meta">
+        <strong className="sheet-scope">{scopeName}</strong>
+        <small className="muted sheet-note">
           * Fechas contables del banco: lo hecho en fin de semana, feriado o después del horario de corte se registra el día hábil siguiente.
         </small>
       </p>
@@ -77,13 +148,28 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
         </label>
         <button onClick={() => window.print()}>Imprimir / PDF (3 hojas)</button>
       </div>
-      <div className="tabs no-print">
-        {SHEETS.map((s) => (
-          <button key={s.key} className={sheet === s.key ? 'chip active' : 'chip'} onClick={() => setFilters({ hoja: s.key })}>
+      <button
+        type="button"
+        className="sheet-nav-toggle no-print"
+        aria-expanded={navOpen}
+        aria-label={navOpen ? 'Ocultar hojas del informe' : 'Navegar entre las hojas del informe'}
+        onClick={() => setNavOpen((o) => !o)}
+      >
+        <span className="chevron" aria-hidden="true" />
+      </button>
+      <nav className={navOpen ? 'sheet-nav open no-print' : 'sheet-nav no-print'} aria-label="Ir a las hojas del informe">
+        {SHEETS.map((s, i) => (
+          <button
+            key={s.key}
+            className={activeSheet === s.key ? 'chip active' : 'chip'}
+            aria-current={activeSheet === s.key ? 'true' : undefined}
+            onClick={() => goToSheet(s.key)}
+          >
+            <span className="sheet-nav-idx">{i + 1}</span>
             {s.label}
           </button>
         ))}
-      </div>
+      </nav>
 
       {(error || income.error || expenses.error) && <p className="error">{error ?? income.error ?? expenses.error}</p>}
       {!report && loading && <p className="muted">Cargando…</p>}
@@ -100,17 +186,23 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
       )}
       {report && report.accounts.length > 0 && (
         <>
-          <Sheet active={sheet === 'resumen'}>
+          <Sheet id="hoja-resumen">
             {header(1, 'Resumen')}
             <SummarySheet report={report} movementsLink={movementsLink} />
           </Sheet>
-          <Sheet active={sheet === 'entradas'}>
+          <Sheet id="hoja-entradas">
             {header(2, 'Lo que entró')}
-            <IncomeSheet movements={income.data} expectedTotal={report.totals.income} />
+            <IncomeSheet movements={income.data} expectedTotal={report.totals.income} onEdit={(m, edit) => saveEdit(m, edit)} />
           </Sheet>
-          <Sheet active={sheet === 'gastos'}>
+          <Sheet id="hoja-gastos">
             {header(3, 'En qué se gastó')}
-            <ExpensesSheet movements={expenses.data} expectedTotal={report.totals.expenses} categories={categories} />
+            <ExpensesSheet
+              movements={expenses.data}
+              expectedTotal={report.totals.expenses}
+              categories={categories}
+              onEditOne={(m, edit) => saveEdit(m, edit)}
+              onEditAll={(ids, edit) => saveEditAll(ids, edit)}
+            />
           </Sheet>
         </>
       )}
@@ -118,8 +210,12 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
   );
 }
 
-function Sheet({ active, children }: { active: boolean; children: ReactNode }) {
-  return <section className={`sheet ${active ? '' : 'inactive'}`}>{children}</section>;
+function Sheet({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <section id={id} className="sheet">
+      {children}
+    </section>
+  );
 }
 
 // ---------- Hoja 1: Resumen ----------
@@ -292,7 +388,7 @@ function SummarySheet({ report, movementsLink }: { report: Report; movementsLink
 
 // ---------- Hoja 2: Entradas ----------
 
-function IncomeSheet({ movements, expectedTotal }: { movements: Movement[] | null; expectedTotal: number }) {
+function IncomeSheet({ movements, expectedTotal, onEdit }: { movements: Movement[] | null; expectedTotal: number; onEdit: (m: Movement, edit: Edit) => void }) {
   const rows = useMemo(() => chronological(movements ?? []), [movements]);
   if (!movements) return <p className="muted">Cargando…</p>;
   const total = rows.reduce((s, m) => s + m.amount, 0);
@@ -305,25 +401,34 @@ function IncomeSheet({ movements, expectedTotal }: { movements: Movement[] | nul
             <th>Fecha</th>
             <th>Entró a</th>
             <th>Desde</th>
+            <th className="no-print">Etiqueta</th>
+            <th className="no-print">Categoría</th>
             <th className="num">Monto</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((m) => (
             <tr key={m.id}>
-              <td className="nowrap">{shortDate(m.date)}</td>
-              <td className="nowrap">{m.account_name}</td>
-              <td>
+              <td className="nowrap" data-label="Fecha">{shortDate(m.date)}</td>
+              <td className="nowrap" data-label="Cuenta">{m.account_name}</td>
+              <td className="detail-cell">
                 {movementTitle(m)}
                 {m.provisional === 1 && <small className="badge">provisorio</small>}
               </td>
-              <td className="num">{clp(m.amount)}</td>
+              <td className="no-print" data-label="Etiqueta">
+                <LabelInput value={m.label ?? ''} fromRule={m.label_source === 'rule'} onCommit={(label) => onEdit(m, { label })} />
+              </td>
+              <td className="no-print" data-label="Categoría">
+                <CategorySelect value={m.category_id} source={m.category_source} onChange={(categoryId) => onEdit(m, { categoryId })} />
+              </td>
+              <td className="num amount-cell" data-label="Monto">{clp(m.amount)}</td>
             </tr>
           ))}
         </tbody>
         <tfoot>
           <tr className="grand-total">
             <td colSpan={3}>Total entró · {rows.length} movimientos</td>
+            <td className="no-print" colSpan={2} />
             <td className="num">{clp(total)}</td>
           </tr>
         </tfoot>
@@ -334,7 +439,19 @@ function IncomeSheet({ movements, expectedTotal }: { movements: Movement[] | nul
 
 // ---------- Hoja 3: Gastos por categoría ----------
 
-function ExpensesSheet({ movements, expectedTotal, categories }: { movements: Movement[] | null; expectedTotal: number; categories: Category[] }) {
+function ExpensesSheet({
+  movements,
+  expectedTotal,
+  categories,
+  onEditOne,
+  onEditAll,
+}: {
+  movements: Movement[] | null;
+  expectedTotal: number;
+  categories: Category[];
+  onEditOne: (m: Movement, edit: Edit) => void;
+  onEditAll: (ids: number[], edit: Edit) => void;
+}) {
   const groups = useMemo(() => groupByCategory(movements ?? [], categories), [movements, categories]);
   if (!movements) return <p className="muted">Cargando…</p>;
   const total = groups.reduce((s, g) => s + g.total, 0);
@@ -348,6 +465,7 @@ function ExpensesSheet({ movements, expectedTotal, categories }: { movements: Mo
             <th>Cuenta</th>
             <th>Detalle</th>
             <th>Etiqueta</th>
+            <th className="no-print">Categoría</th>
             <th className="num">Monto</th>
           </tr>
         </thead>
@@ -358,31 +476,64 @@ function ExpensesSheet({ movements, expectedTotal, categories }: { movements: Mo
                 <span className="dot" style={{ background: g.color ?? 'var(--muted)' }} />
                 {g.name} <small className="muted">· {g.count} mov. · {total ? Math.round((g.total / total) * 100) : 0}%</small>
               </th>
+              <th className="no-print" />
               <th className="num">{clp(g.total)}</th>
             </tr>
             {g.rows.map((r) =>
               r.type === 'single' ? (
                 <tr key={r.m.id}>
-                  <td className="nowrap">{shortDate(r.m.date)}</td>
-                  <td className="nowrap small">{r.m.account_name}</td>
-                  <td>
+                  <td className="nowrap" data-label="Fecha">{shortDate(r.m.date)}</td>
+                  <td className="nowrap small" data-label="Cuenta">{r.m.account_name}</td>
+                  <td className="detail-cell">
                     {movementTitle(r.m)}
                     {r.m.provisional === 1 && <small className="badge">provisorio</small>}
                   </td>
-                  <td className="small">{r.m.label}</td>
-                  <td className="num">{clp(r.m.amount)}</td>
+                  {/* La etiqueta editable solo en pantalla; al imprimir queda el texto. */}
+                  <td className="small" data-label="Etiqueta">
+                    <span className="no-print">
+                      <LabelInput value={r.m.label ?? ''} fromRule={r.m.label_source === 'rule'} onCommit={(label) => onEditOne(r.m, { label })} />
+                    </span>
+                    <span className="print-only">{r.m.label}</span>
+                  </td>
+                  <td className="no-print" data-label="Categoría">
+                    <CategorySelect value={r.m.category_id} source={r.m.category_source} onChange={(categoryId) => onEditOne(r.m, { categoryId })} />
+                  </td>
+                  <td className="num amount-cell" data-label="Monto">{clp(r.m.amount)}</td>
                 </tr>
               ) : (
-                <tr key={r.key}>
-                  <td className="nowrap">{shortDate(r.items[0].date)}</td>
-                  <td className="nowrap small">{r.items[0].account_name}</td>
-                  <td>
-                    Nómina Pago Fácil · {r.items.length} pagos
-                    {r.batchesInDay > 1 && ` · nómina ${r.batch} de ${r.batchesInDay}`}
-                  </td>
-                  <td className="small">{new Set(r.items.map((m) => m.label ?? '')).size === 1 ? r.items[0].label : ''}</td>
-                  <td className="num">{clp(r.items.reduce((s, m) => s + m.amount, 0))}</td>
-                </tr>
+                (() => {
+                  const ids = r.items.map((m) => m.id);
+                  const label = new Set(r.items.map((m) => m.label ?? '')).size === 1 ? r.items[0].label : '';
+                  const singleCategory = new Set(r.items.map((m) => m.category_id)).size === 1;
+                  return (
+                    <tr key={r.key}>
+                      <td className="nowrap" data-label="Fecha">{shortDate(r.items[0].date)}</td>
+                      <td className="nowrap small" data-label="Cuenta">{r.items[0].account_name}</td>
+                      <td className="detail-cell">
+                        Nómina Pago Fácil · {r.items.length} pagos
+                        {r.batchesInDay > 1 && ` · nómina ${r.batch} de ${r.batchesInDay}`}
+                      </td>
+                      <td className="small" data-label="Etiqueta">
+                        <span className="no-print">
+                          <LabelInput
+                            value={label ?? ''}
+                            placeholder={label === '' ? '(varias)' : ''}
+                            onCommit={(l) => onEditAll(ids, { label: l })}
+                          />
+                        </span>
+                        <span className="print-only">{label}</span>
+                      </td>
+                      <td className="no-print" data-label="Categoría">
+                        <CategorySelect
+                          value={singleCategory ? r.items[0].category_id : null}
+                          placeholder={singleCategory ? '— Sin categoría —' : '(varias)'}
+                          onChange={(categoryId) => onEditAll(ids, { categoryId })}
+                        />
+                      </td>
+                      <td className="num amount-cell" data-label="Monto">{clp(r.items.reduce((s, m) => s + m.amount, 0))}</td>
+                    </tr>
+                  );
+                })()
               ),
             )}
           </tbody>
@@ -390,6 +541,7 @@ function ExpensesSheet({ movements, expectedTotal, categories }: { movements: Mo
         <tfoot>
           <tr className="grand-total">
             <td colSpan={4}>Total salió · {movements.length} movimientos</td>
+            <td className="no-print" />
             <td className="num">{clp(total)}</td>
           </tr>
         </tfoot>

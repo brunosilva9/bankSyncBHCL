@@ -49,6 +49,27 @@ describe('API', () => {
 
     const report = await request(app).get('/api/report?from=2026-10-01&to=2026-10-31').set('Cookie', cookie).expect(200);
     expect(report.body.totals).toMatchObject({ opening: 1000, expenses: 300, closing: 700 });
+    expect(report.body.note).toBeNull();
+  });
+
+  it('guarda el comentario del informe para su período real y por alcance de cuentas', async () => {
+    // El filtro va más allá de los datos (12/10), así que el comentario queda en el período real.
+    const report = await request(app).get('/api/report?from=2026-10-01&to=2026-10-31').set('Cookie', cookie).expect(200);
+    const { period } = report.body;
+    const put = (body: object) => request(app).put('/api/report-note').set(H).set('Cookie', cookie).send({ ...period, ...body });
+
+    const saved = await put({ text: '  Se pagó la nómina de la semana.  ' }).expect(200);
+    expect(saved.body).toMatchObject({ text: 'Se pagó la nómina de la semana.', username: 'admin' });
+
+    const again = await request(app).get('/api/report?from=2026-10-10&to=2026-10-20').set('Cookie', cookie).expect(200);
+    expect(again.body.note.text).toBe('Se pagó la nómina de la semana.');
+    const oneAccount = await request(app).get(`/api/report?from=2026-10-01&to=2026-10-31&accounts=${report.body.accounts[0].accountId}`).set('Cookie', cookie);
+    expect(oneAccount.body.note).toBeNull();
+
+    await put({ text: 'x'.repeat(501) }).expect(400);
+    await put({ text: '' }).expect(200);
+    const cleared = await request(app).get('/api/report?from=2026-10-01&to=2026-10-31').set('Cookie', cookie);
+    expect(cleared.body.note).toBeNull();
   });
 
   it('responde 400 con un archivo que no es cartola', async () => {
