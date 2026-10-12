@@ -152,6 +152,42 @@ describe('BancoEstado', () => {
     expect(row).toEqual({ system_key: 'internal', label: 'Desde BancoEstado' });
   });
 
+  it('parea un envío genérico de BancoEstado con el abono que nombra a la empresa', async () => {
+    // El cargo en BancoEstado no trae contraparte; el abono en la otra cuenta sí nombra a la empresa emisora.
+    const be = await bancoEstadoXlsx(
+      'consolidated',
+      [{ date: '13/10/2026', op: '0001080', desc: 'TRANSFERENCIA FONDOS INTERNET', out: 2000, inn: 0, balance: 2000 }],
+      { 'N° Cuenta Corriente': BE_ACCOUNT, 'Fecha Inicio': '13/10/2026', 'Fecha Final': '13/10/2026', 'N° Cartola': '041', 'Saldo Inicial': '$4.000', 'Saldo Final': '$2.000' },
+    );
+    const beId = importCartola(db, await parseStatementFile(be), 'be.xlsx', null).accountId;
+
+    const bd = importCartola(
+      db,
+      await parseStatementFile(
+        Buffer.from(cartola(ACC_A, '2026-10-13', 2000, [{ date: '2026-10-13', amount: 2000, type: 'A', desc: 'Traspaso De: Transportes Xy SPA' }])),
+      ),
+      'a.txt',
+      null,
+    );
+    db.prepare("UPDATE accounts SET name = 'Agricola Santa Sara' WHERE id = ?").run(bd.accountId);
+
+    recategorize(db);
+    const cats = db.prepare('SELECT m.account_id, c.system_key FROM movements m JOIN categories c ON c.id = m.category_id ORDER BY m.account_id').all();
+    expect(cats).toEqual([
+      { account_id: beId, system_key: 'internal' },
+      { account_id: bd.accountId, system_key: 'internal' },
+    ]);
+  });
+
+  it('al reimportar la misma cartola, refresca la clasificación de lo ya cargado', async () => {
+    importCartola(db, await parseStatementFile(await consolidated40()), 'c40.xlsx', null);
+    db.prepare("UPDATE movements SET kind = 'other', counterparty = NULL, counterparty_rut = NULL WHERE description LIKE 'Transferencia%'").run();
+
+    importCartola(db, await parseStatementFile(await consolidated40()), 'c40-bis.xlsx', null);
+    const kinds = db.prepare("SELECT kind FROM movements WHERE description LIKE 'Transferencia%' ORDER BY description").all();
+    expect(kinds).toEqual([{ kind: 'transfer_out' }, { kind: 'transfer_in' }, { kind: 'transfer_in' }]);
+  });
+
   it('rechaza el .xls antiguo de Banco de Chile', async () => {
     await expect(parseStatementFile(Uint8Array.from([0xd0, 0xcf, 0x11, 0xe0, 0, 0, 0, 0]))).rejects.toThrow(/\.txt/);
   });

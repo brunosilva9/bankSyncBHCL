@@ -30,6 +30,9 @@ interface StoredMovement {
   direction: 'C' | 'A';
   description: string;
   doc_number: string | null;
+  kind: string;
+  counterparty: string | null;
+  counterparty_rut: string | null;
 }
 
 const keyOf = (m: { amount: number; direction: string; description: string; doc_number?: string | null; docNumber?: string | null }) =>
@@ -101,7 +104,9 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
         ).lastInsertRowid,
     );
 
-    const selectDay = db.prepare('SELECT id, seq, amount, direction, description, doc_number FROM movements WHERE account_id = ? AND date = ? ORDER BY seq');
+    const selectDay = db.prepare(
+      'SELECT id, seq, amount, direction, description, doc_number, kind, counterparty, counterparty_rut FROM movements WHERE account_id = ? AND date = ? ORDER BY seq',
+    );
     const insert = db.prepare(
       `INSERT INTO movements (account_id, date, seq, amount, direction, description, doc_number, kind, counterparty, counterparty_rut,
                               balance_after, provisional, import_id)
@@ -109,6 +114,9 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
     );
     const setSeq = db.prepare('UPDATE movements SET seq = ? WHERE id = ?');
     const setBalance = db.prepare('UPDATE movements SET balance_after = ? WHERE id = ?');
+    // La clasificación (tipo y contraparte) es derivada de la descripción: al reimportar se refresca,
+    // así una mejora del clasificador también arregla movimientos ya cargados.
+    const setClassification = db.prepare('UPDATE movements SET kind = ?, counterparty = ?, counterparty_rut = ? WHERE id = ?');
     const latestCoveringImport = db.prepare(
       "SELECT MAX(balance_date) AS d FROM imports WHERE account_id = ? AND id != ? AND kind = 'account' AND from_date <= ? AND to_date >= ?",
     );
@@ -145,6 +153,10 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
           matchedIds.add(match.id);
           if (fileIsAuthority) setSeq.run(i, match.id);
           if (m.balance !== undefined) setBalance.run(m.balance, match.id);
+          const c = classifyDescription(m.description);
+          if (c.kind !== match.kind || c.counterparty !== match.counterparty || (c.counterpartyRut ?? null) !== match.counterparty_rut) {
+            setClassification.run(c.kind, c.counterparty, c.counterpartyRut ?? null, match.id);
+          }
           if (m.position === 0) anchorId = match.id;
         } else {
           toInsert.push({ m, seq: fileIsAuthority ? i : existing.length + toInsert.length });

@@ -56,47 +56,58 @@ function loadOwnAccounts(db: DB): OwnAccount[] {
   });
 }
 
-type Transfer = { id: number; account_id: number; date: string; amount: number; direction: 'C' | 'A'; counterparty: string; counterparty_rut: string | null };
+type Transfer = { id: number; account_id: number; date: string; amount: number; direction: 'C' | 'A'; counterparty: string | null; counterparty_rut: string | null };
 
 const daysBetween = (a: string, b: string) => Math.abs(Date.parse(a) - Date.parse(b)) / 86_400_000;
 
 /**
  * Traspasos entre cuentas propias cargadas: un cargo en una cuenta y un abono en la otra por el mismo
- * monto, cuya contraparte es la otra empresa (por nombre o RUT). Solo esos se marcan como internos.
- * Entre bancos distintos el abono puede llegar uno o dos días después, así que se acepta hasta 3 días
- * de diferencia (prefiriendo el mismo día). Un traspaso desde una cuenta propia que no se carga no tiene
- * pareja y cuenta como ingreso o gasto normal; se identifica con una etiqueta.
+ * monto. Normalmente cada lado nombra a la otra empresa (por contraparte o RUT) y se exige que se
+ * referencien mutuamente. Pero un envío por la banca en línea de BancoEstado no trae contraparte
+ * ("TRANSFERENCIA FONDOS INTERNET"): si es genérico, basta que el otro lado nombre a la empresa de la
+ * cuenta que lo emitió. Entre bancos distintos el abono puede llegar uno o dos días después, así que
+ * se acepta hasta 3 días de diferencia (prefiriendo el mismo día). Un traspaso desde una cuenta propia
+ * que no se carga no tiene pareja y cuenta como ingreso o gasto normal; se identifica con una etiqueta.
  */
 function findInternalPairs(db: DB, own: OwnAccount[]): Set<number> {
   const transfers = db
     .prepare(
       `SELECT id, account_id, date, amount, direction, counterparty, counterparty_rut FROM movements
-       WHERE kind IN ('transfer_in', 'transfer_out') AND counterparty IS NOT NULL ORDER BY date, seq`,
+       WHERE kind IN ('transfer_in', 'transfer_out') ORDER BY date, seq`,
     )
     .all() as Transfer[];
 
-  const candidates = transfers.flatMap((t) => {
+  /** Cuentas propias a las que apunta un traspaso por su contraparte (nombre o RUT). Vacío si es genérico. */
+  const pointsTo = (t: Transfer) => {
+    const generic = !t.counterparty && !t.counterparty_rut;
+    if (generic) return { others: new Set<number>(), generic };
     const tRut = rutKey(t.counterparty_rut ?? t.counterparty);
     const others = new Set(
       own
-        .filter((a) => a.id !== t.account_id && ((a.rutKey !== null && a.rutKey === tRut) || a.names.some((n) => sameCounterparty(n, t.counterparty))))
+        .filter(
+          (a) =>
+            a.id !== t.account_id &&
+            ((a.rutKey !== null && a.rutKey === tRut) || (t.counterparty !== null && a.names.some((n) => sameCounterparty(n, t.counterparty!)))),
+        )
         .map((a) => a.id),
     );
-    return others.size ? [{ ...t, others }] : [];
-  });
+    return { others, generic };
+  };
+
+  const candidates = transfers.map((t) => ({ ...t, ...pointsTo(t) }));
+
+  /** ¿Se referencian? Los dos con nombre deben apuntarse mutuamente; si uno es genérico, basta que el otro lo nombre. */
+  const link = (out: (typeof candidates)[number], inn: (typeof candidates)[number]) => {
+    if (out.generic && inn.generic) return false;
+    if (out.generic) return inn.others.has(out.account_id);
+    if (inn.generic) return out.others.has(inn.account_id);
+    return out.others.has(inn.account_id) && inn.others.has(out.account_id);
+  };
 
   const paired = new Set<number>();
   for (const out of candidates.filter((c) => c.direction === 'C')) {
     const options = candidates
-      .filter(
-        (c) =>
-          c.direction === 'A' &&
-          !paired.has(c.id) &&
-          c.amount === out.amount &&
-          out.others.has(c.account_id) &&
-          c.others.has(out.account_id) &&
-          daysBetween(c.date, out.date) <= 3,
-      )
+      .filter((c) => c.direction === 'A' && !paired.has(c.id) && c.amount === out.amount && link(out, c) && daysBetween(c.date, out.date) <= 3)
       .sort((x, y) => daysBetween(x.date, out.date) - daysBetween(y.date, out.date));
     if (options.length) {
       paired.add(out.id);

@@ -55,6 +55,9 @@ export function classifyDescription(description: string): Classification {
       counterpartyRut: rut,
     };
   }
+  // BancoEstado: "TRANSFERENCIA FONDOS INTERNET" es un envío hecho por la banca en línea (las entradas
+  // llegan como "Transferencia otro banco de rut …"). No trae la contraparte, así que queda genérico.
+  if (/^transferencia\s+(de\s+)?fondos\b/i.test(d)) return { kind: 'transfer_out', counterparty: null };
   if (/^compra\b/i.test(d)) return { kind: 'card_payment', counterparty: null };
 
   for (const [re, kind] of PATTERNS) {

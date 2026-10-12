@@ -80,7 +80,7 @@ BancoEstado no entrega `.txt`. Se importan sus Excel (`.xlsx`), que traen el **s
 - **Cartola histórica** (consolidada y numerada; ej. N° 040 = una semana): es la definitiva.
 - **Cartola en línea** (provisoria): lo ocurrido desde la última consolidada. Sus movimientos quedan marcados como *provisorios*. Una cartola en línea nueva reemplaza a la anterior completa, y una consolidada reemplaza lo provisorio de su período. Las categorías, etiquetas y notas puestas a mano se traspasan al movimiento consolidado del mismo día, sentido y monto.
 
-Las transferencias de BancoEstado traen el RUT de la contraparte («Transferencia otro banco a rut 11111111-1»). Por eso los traspasos internos también se parean por RUT, y las cuentas de una misma empresa (mismo RUT, en distintos bancos) comparten nombres y alias. Entre bancos distintos se acepta hasta 3 días de diferencia entre la salida y la llegada.
+Las transferencias de BancoEstado traen el RUT de la contraparte («Transferencia otro banco a rut 11111111-1»). Por eso los traspasos internos también se parean por RUT, y las cuentas de una misma empresa (mismo RUT, en distintos bancos) comparten nombres y alias. Entre bancos distintos se acepta hasta 3 días de diferencia entre la salida y la llegada. Los envíos hechos por la banca en línea aparecen como «TRANSFERENCIA FONDOS INTERNET», sin contraparte; igual se reconocen y se parean cuando la otra cuenta nombra a la empresa que los emitió.
 
 Un traspaso con pareja confirmada siempre se marca como interno, aunque antes se haya categorizado a mano (por ejemplo, cuando la otra cuenta aún no se cargaba). Si no fuera así, se contaría dos veces. La etiqueta se conserva.
 

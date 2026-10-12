@@ -6,6 +6,7 @@ describe('classifyDescription', () => {
     ['Traspaso A: Pedro Gonzalez Rojas', 'transfer_out', 'Pedro Gonzalez Rojas'],
     ['App-traspaso A: Maria Fernanda Soto Valenzue', 'transfer_out', 'Maria Fernanda Soto Valenzue'],
     ['Traspaso De: Agricola Los Robles Spa', 'transfer_in', 'Agricola Los Robles Spa'],
+    ['TRANSFERENCIA FONDOS INTERNET', 'transfer_out', null],
     ['Pago Fácil Bch: 012345678k', 'payroll', '12.345.678-K'],
     ['Pago: Comercial El Faro', 'card_payment', 'Comercial El Faro'],
     ['Transferencia Desde Linea De Credito', 'credit_line', 'Línea de crédito'],
