@@ -67,7 +67,7 @@ const daysBetween = (a: string, b: string) => Math.abs(Date.parse(a) - Date.pars
  * ("TRANSFERENCIA FONDOS INTERNET"): si es genérico, basta que el otro lado nombre a la empresa de la
  * cuenta que lo emitió. Entre bancos distintos el abono puede llegar uno o dos días después, así que
  * se acepta hasta 3 días de diferencia (prefiriendo el mismo día). Un traspaso desde una cuenta propia
- * que no se carga no tiene pareja y cuenta como ingreso o gasto normal; se identifica con una etiqueta.
+ * que no se carga no tiene pareja y cuenta como ingreso o gasto normal; se identifica con un comentario.
  */
 function findInternalPairs(db: DB, own: OwnAccount[]): Set<number> {
   const transfers = db
@@ -118,7 +118,7 @@ function findInternalPairs(db: DB, own: OwnAccount[]): Set<number> {
 }
 
 /**
- * Vuelve a calcular la categoría y la etiqueta de los movimientos que no fueron editados a mano.
+ * Vuelve a calcular la categoría y el comentario de los movimientos que no fueron editados a mano.
  * Prioridad: traspaso interno > reglas del usuario (la más nueva primero) > categoría automática por tipo.
  * Recorre todas las cuentas, porque cargar una cartola puede convertir en interno un traspaso de otra cuenta.
  */

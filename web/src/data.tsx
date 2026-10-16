@@ -9,7 +9,7 @@ interface SharedData {
   reload: () => Promise<void>;
 }
 
-/** Un solo <datalist> con las etiquetas existentes, compartido por todos los campos de etiqueta. */
+/** Un solo <datalist> con los comentarios existentes, compartido por todos los campos de comentario. */
 export const LABELS_LIST_ID = 'labels-list';
 
 const Ctx = createContext<SharedData | null>(null);

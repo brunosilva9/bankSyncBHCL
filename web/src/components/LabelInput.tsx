@@ -5,7 +5,7 @@ interface Props {
   value: string;
   placeholder?: string;
   fromRule?: boolean;
-  /** Se llama al salir del campo o con Enter, solo si el valor cambió. null = borrar etiqueta. */
+  /** Se llama al salir del campo o con Enter, solo si el valor cambió. null = borrar comentario. */
   onCommit: (label: string | null) => void;
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, setUnauthorizedHandler } from './api';
 import { DataProvider } from './data';
 import { ImportPage } from './pages/ImportPage';
@@ -25,6 +25,7 @@ export function App() {
   const route = useRoute();
   const theme = useTheme();
   const logo = theme === 'dark' ? '/icon-dark.svg' : '/icon.svg';
+  const topbarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     setUnauthorizedHandler(() => setUser(null));
@@ -52,6 +53,18 @@ export function App() {
     };
   }, [menuOpen]);
 
+  // Alto real de la barra superior (cambia si se parte en dos filas o se abre el menú móvil):
+  // las barras fijas de cada página se pegan justo debajo (--topbar-h).
+  useEffect(() => {
+    const el = topbarRef.current;
+    if (!el) return;
+    const update = () => document.documentElement.style.setProperty('--topbar-h', `${el.offsetHeight}px`);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [user]);
+
   if (user === undefined) return null;
   if (user === null) return <LoginPage onLogin={setUser} />;
 
@@ -62,7 +75,7 @@ export function App() {
 
   return (
     <DataProvider>
-      <header className="topbar no-print">
+      <header ref={topbarRef} className="topbar no-print">
         <a className="brand" href={href('/informe')} title="Ir al informe">
           <img className="brand-logo" src={logo} alt="" />
           <span>SyncBanks</span>

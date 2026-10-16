@@ -37,6 +37,12 @@ export function PayrollPage({ params }: { params: Record<string, string> }) {
     refresh();
   };
 
+  /** Marca (o desmarca) un pago como el último de su nómina; los de abajo quedan en otra nómina. */
+  const splitAfter = async (m: Movement, split: boolean) => {
+    await api.post(`/api/movements/${m.id}/payroll-split`, { split });
+    refresh();
+  };
+
   return (
     <div className="page">
       <div className="toolbar">
@@ -73,13 +79,14 @@ export function PayrollPage({ params }: { params: Record<string, string> }) {
 
       {!loading && batches.length === 0 && <p className="muted">No hay pagos de Pago Fácil en este período.</p>}
       {view === 'nominas' ? (
-        <BatchesTable batches={batches} onEdit={editBatch} onSavePayee={savePayee} />
+        <BatchesTable batches={batches} onEdit={editBatch} onSavePayee={savePayee} onSplit={splitAfter} />
       ) : (
         <WorkersTable workers={workers} onSavePayee={savePayee} />
       )}
       <p className="muted small">
         Cada nómina es un bloque de pagos Pago Fácil seguidos en la cartola. Dos nóminas cargadas una tras otra, sin otro movimiento entre
-        medio, aparecen como una sola.
+        medio, aparecen como una sola: ábrela y usa <strong>✂ Cortar aquí</strong> en la última persona de la primera nómina; las de abajo
+        pasan a otra. Si hay más de dos, se corta de nuevo.
       </p>
     </div>
   );
@@ -89,9 +96,11 @@ function BatchesTable(props: {
   batches: PayrollBatch[];
   onEdit: (b: PayrollBatch, edit: { categoryId?: number | null | 'auto'; label?: string | null }) => void;
   onSavePayee: (rut: string, name: string) => void;
+  onSplit: (m: Movement, split: boolean) => Promise<void>;
 }) {
-  const [open, setOpen] = useState<Set<string>>(new Set());
-  const toggle = (key: string) =>
+  // Las nóminas abiertas se recuerdan por su primer pago: al cortar o unir cambia el n° de nómina, no el primer pago.
+  const [open, setOpen] = useState<Set<number>>(new Set());
+  const toggle = (key: number) =>
     setOpen((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
@@ -110,20 +119,20 @@ function BatchesTable(props: {
             <th className="num">Pagos</th>
             <th className="num">Total</th>
             <th>Categoría</th>
-            <th>Etiqueta</th>
+            <th>Comentario</th>
           </tr>
         </thead>
         <tbody>
           {props.batches.map((b) => {
             const categories = new Set(b.items.map((m) => m.category_id));
             const labels = new Set(b.items.map((m) => m.label ?? ''));
-            const isOpen = open.has(b.key);
+            const isOpen = open.has(b.items[0].id);
             return [
               <tr key={b.key} className="batch">
                 <td className="nowrap">{shortDate(b.date, true)}</td>
                 <td className="nowrap small">{b.accountName}</td>
                 <td>
-                  <button className="link" onClick={() => toggle(b.key)}>
+                  <button className="link" onClick={() => toggle(b.items[0].id)}>
                     {isOpen ? '▾' : '▸'} {b.batchesInDay > 1 ? `Nómina ${b.batch} de ${b.batchesInDay}` : 'Nómina'}
                   </button>
                 </td>
@@ -147,9 +156,25 @@ function BatchesTable(props: {
                 </td>
               </tr>,
               ...(isOpen
-                ? b.items.map((m) => (
+                ? b.items.map((m, i) => (
                     <tr key={m.id} className="nested">
-                      <td />
+                      <td className="nowrap">
+                        {i < b.items.length - 1 ? (
+                          <button
+                            className="link small"
+                            title="Esta persona es la última de la nómina: las de abajo pasan a otra nómina"
+                            onClick={() => props.onSplit(m, true).then(() => setOpen((prev) => new Set(prev).add(b.items[i + 1].id)))}
+                          >
+                            ✂ Cortar aquí
+                          </button>
+                        ) : (
+                          m.payroll_split_after === 1 && (
+                            <button className="link small" title="Vuelve a juntar esta nómina con la que sigue abajo" onClick={() => props.onSplit(m, false)}>
+                              Unir con la de abajo
+                            </button>
+                          )
+                        )}
+                      </td>
                       <td className="nowrap small muted">{m.counterparty}</td>
                       <td colSpan={2}>
                         <PayeeName rut={m.counterparty ?? ''} name={m.payee_name} onSave={props.onSavePayee} />

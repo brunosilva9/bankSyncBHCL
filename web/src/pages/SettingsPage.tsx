@@ -230,7 +230,7 @@ function RulesSection() {
       <h2>Reglas</h2>
       <p className="muted small">
         Se aplican a los movimientos actuales y a los de próximas cartolas, salvo a los que editaste a mano. Las más nuevas tienen prioridad. También
-        se crean desde Movimientos al cambiar la categoría o etiqueta de uno.
+        se crean desde Movimientos al cambiar la categoría o el comentario de uno.
       </p>
       <table>
         <tbody>
@@ -262,7 +262,7 @@ function RulesSection() {
           <option value="A">Solo abonos</option>
         </select>
         <CategorySelect value={form.categoryId} placeholder="Categoría (opcional)" onChange={(v) => setForm({ ...form, categoryId: typeof v === 'number' ? v : null })} />
-        <input placeholder="Etiqueta (opcional)" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
+        <input placeholder="Comentario (opcional)" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} />
         <button onClick={add} disabled={!form.pattern.trim() || (form.categoryId === null && !form.label.trim())}>
           Agregar regla
         </button>

@@ -15,7 +15,7 @@ import {
 import type { DB } from './db.js';
 import { recategorize } from './domain/categorize.js';
 import { calibrateFromAvailable, calibrateFromLineCartola, isCreditLineCartola, recomputeCreditLine } from './domain/creditLine.js';
-import { checkBalances, importCartola } from './domain/importer.js';
+import { checkBalances, importCartola, recomputePayrollBatches } from './domain/importer.js';
 import { buildReport } from './domain/report.js';
 import { CartolaParseError, displayAccountNumber } from './parser/cartola.js';
 import { parseStatementFile } from './parser/index.js';
@@ -219,7 +219,7 @@ export function createApp(db: DB, opts: AppOptions) {
     const sql = `
       SELECT m.id, m.account_id, a.name AS account_name, m.date, m.seq, m.amount, m.direction, m.description, m.doc_number,
              m.kind, m.counterparty, p.name AS payee_name, m.category_id, m.category_source, m.label, m.label_source,
-             m.note, m.balance_after, m.provisional, m.payroll_batch, c.system_key
+             m.note, m.balance_after, m.provisional, m.payroll_batch, m.payroll_split_after, c.system_key
       FROM movements m
       JOIN accounts a ON a.id = m.account_id
       LEFT JOIN categories c ON c.id = m.category_id
@@ -239,7 +239,7 @@ export function createApp(db: DB, opts: AppOptions) {
       }
     }
     if ('label' in body) {
-      const label = str(body.label, 'etiqueta', { optional: true, max: 80 }) ?? null;
+      const label = str(body.label, 'comentario', { optional: true, max: 80 }) ?? null;
       db.prepare('UPDATE movements SET label = ?, label_source = ? WHERE id = ?').run(label, label ? 'manual' : null, id);
     }
     if ('note' in body) {
@@ -252,8 +252,23 @@ export function createApp(db: DB, opts: AppOptions) {
     const id = Number(req.params.id);
     if (!db.prepare('SELECT 1 FROM movements WHERE id = ?').get(id)) throw new HttpError(404, 'Movimiento no encontrado');
     db.transaction(() => applyEdit(id, req.body))();
-    // Volver a "automático" o borrar una etiqueta manual deja que las reglas vuelvan a actuar.
+    // Volver a "automático" o borrar un comentario manual deja que las reglas vuelvan a actuar.
     recategorize(db);
+    res.json({ ok: true });
+  });
+
+  // Separar nóminas: la cartola no dice dónde termina una nómina y empieza otra si se cargaron seguidas.
+  // El usuario marca el último pago de una nómina y los de abajo pasan a la siguiente.
+  api.post('/movements/:id/payroll-split', (req, res) => {
+    const id = Number(req.params.id);
+    if (typeof req.body.split !== 'boolean') throw bad('split inválido');
+    const m = db.prepare('SELECT account_id, kind FROM movements WHERE id = ?').get(id) as { account_id: number; kind: string } | undefined;
+    if (!m) throw new HttpError(404, 'Movimiento no encontrado');
+    if (m.kind !== 'payroll') throw bad('Solo se pueden separar pagos de nómina (Pago Fácil)');
+    db.transaction(() => {
+      db.prepare('UPDATE movements SET payroll_split_after = ? WHERE id = ?').run(req.body.split ? 1 : 0, id);
+      recomputePayrollBatches(db, m.account_id);
+    })();
     res.json({ ok: true });
   });
 
@@ -282,8 +297,8 @@ export function createApp(db: DB, opts: AppOptions) {
     const pattern = str(req.body.pattern, 'texto', { max: 100 })!;
     const direction = req.body.direction === 'C' || req.body.direction === 'A' ? req.body.direction : null;
     const categoryId = req.body.categoryId === undefined ? null : intOrNull(req.body.categoryId, 'categoría');
-    const label = str(req.body.label, 'etiqueta', { optional: true, max: 80 }) ?? null;
-    if (categoryId === null && label === null) throw bad('La regla debe asignar una categoría o una etiqueta');
+    const label = str(req.body.label, 'comentario', { optional: true, max: 80 }) ?? null;
+    if (categoryId === null && label === null) throw bad('La regla debe asignar una categoría o un comentario');
 
     db.transaction(() => {
       db.prepare('INSERT INTO rules (match_type, pattern, direction, category_id, label) VALUES (?, ?, ?, ?, ?)').run(

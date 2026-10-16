@@ -33,7 +33,7 @@ export function LoginPage({ onLogin }: { onLogin: (username: string) => void }) 
         <h1>SyncBanks</h1>
         <p className="login-tagline">
           Vista global de tus cuentas bancarias: importa las cartolas, ordena los movimientos con categorías y
-          etiquetas, y arma el informe del período listo para PDF.
+          comentarios, y arma el informe del período listo para PDF.
         </p>
         <form onSubmit={submit}>
           <label>

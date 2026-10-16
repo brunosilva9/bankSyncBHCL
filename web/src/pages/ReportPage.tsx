@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, qs, type Category, type Movement, type Report } from '../api';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { api, qs, NOTE_MAX, type Category, type Movement, type Report, type ReportNote } from '../api';
 import { CategorySelect } from '../components/CategorySelect';
 import { LabelInput } from '../components/LabelInput';
 import { RangePicker } from '../components/RangePicker';
 import { useFetch, useShared } from '../data';
 import { clp, clpSigned, presetRange, shortDate, type DateRange } from '../format';
 import { chronological, groupByCategory, movementTitle, periodText, reportFileName, topPayroll } from '../reportDetail';
+import { type DisplayRow } from '../payroll';
 import { href, navigate } from '../router';
 
 // El informe tiene tres hojas: Resumen (siempre una sola página), Entradas y Gastos.
@@ -18,9 +19,12 @@ const SHEETS = [
 ] as const;
 type SheetKey = (typeof SHEETS)[number]['key'];
 
+/** Movimientos que van pegados a la cabecera de cada categoría al imprimir. */
+const HEAD_ROWS = 4;
+
 type LinkFn = (p: Record<string, string | number | null | undefined>) => string;
 
-/** Edición de categoría o etiqueta de un movimiento, igual que en Movimientos. */
+/** Edición de categoría o comentario de un movimiento, igual que en Movimientos. */
 type Edit = { categoryId?: number | null | 'auto'; label?: string | null };
 
 export function ReportPage({ params }: { params: Record<string, string> }) {
@@ -32,13 +36,26 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
   // En móvil la navegación se pliega tras una flecha flotante para no tapar el contenido.
   const [navOpen, setNavOpen] = useState(false);
 
+  // La barra de filtros es fija: su alto (varía si se parte en varias filas) define dónde queda
+  // el título de cada hoja al saltar a ella (scroll-margin-top de .sheet).
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+    const update = () => document.documentElement.style.setProperty('--report-toolbar-h', `${el.offsetHeight}px`);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   const setFilters = (patch: Record<string, string | undefined>) => navigate('/informe', { ...range, account: accountId, ...patch }, true);
   const goToSheet = (key: SheetKey) => {
     setNavOpen(false);
     document.getElementById(`hoja-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const { data: report, error, loading, refresh: refreshReport } = useFetch<Report>(`/api/report${qs({ ...range, accounts: accountId })}`);
+  const { data: report, error, loading, refresh: refreshReport, setData: setReport } = useFetch<Report>(`/api/report${qs({ ...range, accounts: accountId })}`);
   // Mismo criterio que el informe: sin traspasos internos ni giros/amortizaciones de la línea.
   const detail = { ...range, accountId, excludeInternal: 1, limit: 5000 };
   const income = useFetch<Movement[]>(`/api/movements${qs({ ...detail, direction: 'A' })}`);
@@ -90,6 +107,13 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
   // (ej. filtro hasta el 18/10, pero la última cartola llega al 13/10).
   const period = report?.period ?? range;
 
+  // El comentario se guarda para el período real y el alcance de cuentas que muestra el informe.
+  // Se refleja en pantalla con lo que devuelve el servidor (texto ya recortado) sin recargar el informe.
+  const saveNote = async (text: string) => {
+    const saved = await api.put<ReportNote | null>('/api/report-note', { from: period.from, to: period.to, accounts: accountId || undefined, text });
+    setReport((prev) => (prev ? { ...prev, note: saved } : prev));
+  };
+
   useEffect(() => {
     const previous = document.title;
     document.title = reportFileName(period, scopeName);
@@ -133,7 +157,7 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
 
   return (
     <div className="page report">
-      <div className="toolbar no-print">
+      <div ref={toolbarRef} className="toolbar no-print">
         <RangePicker value={range} onChange={(r) => setFilters({ ...r })} />
         <label>
           Cuenta{' '}
@@ -189,6 +213,7 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
           <Sheet id="hoja-resumen">
             {header(1, 'Resumen')}
             <SummarySheet report={report} movementsLink={movementsLink} />
+            <NoteCard note={report.note} onSave={saveNote} />
           </Sheet>
           <Sheet id="hoja-entradas">
             {header(2, 'Lo que entró')}
@@ -229,8 +254,9 @@ function SummarySheet({ report, movementsLink }: { report: Report; movementsLink
 
   return (
     <>
+      {/* Avisos de cobertura de cartolas: son para quien arma el informe, no salen en el PDF. */}
       {report.warnings.map((w) => (
-        <p key={w} className="warning">
+        <p key={w} className="warning no-print">
           {w}
         </p>
       ))}
@@ -330,6 +356,7 @@ function SummarySheet({ report, movementsLink }: { report: Report; movementsLink
               <tr>
                 <th>Fecha</th>
                 <th>Cuenta</th>
+                <th>Comentario</th>
                 <th className="num">Pagos</th>
                 <th className="num">Total</th>
               </tr>
@@ -342,13 +369,14 @@ function SummarySheet({ report, movementsLink }: { report: Report; movementsLink
                     {p.batchesInDay > 1 && <small className="muted"> · nómina {p.batch} de {p.batchesInDay}</small>}
                   </td>
                   <td>{p.accountName}</td>
+                  <td className="small">{p.comments.join(' · ')}</td>
                   <td className="num">{p.count}</td>
                   <td className="num">{clp(p.total)}</td>
                 </tr>
               ))}
               {payroll.rest.batches > 0 && (
                 <tr className="muted">
-                  <td colSpan={2}>Otras {payroll.rest.batches} nóminas más chicas</td>
+                  <td colSpan={3}>Otras {payroll.rest.batches} nóminas más chicas</td>
                   <td className="num">{payroll.rest.count}</td>
                   <td className="num">{clp(payroll.rest.total)}</td>
                 </tr>
@@ -356,7 +384,7 @@ function SummarySheet({ report, movementsLink }: { report: Report; movementsLink
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={2}>
+                <td colSpan={3}>
                   <strong>Total · {report.payroll.length} nóminas</strong>
                   <span className="no-print">
                     {' '}
@@ -401,7 +429,7 @@ function IncomeSheet({ movements, expectedTotal, onEdit }: { movements: Movement
             <th>Fecha</th>
             <th>Entró a</th>
             <th>Desde</th>
-            <th className="no-print">Etiqueta</th>
+            <th className="no-print">Comentario</th>
             <th className="no-print">Categoría</th>
             <th className="num">Monto</th>
           </tr>
@@ -415,7 +443,7 @@ function IncomeSheet({ movements, expectedTotal, onEdit }: { movements: Movement
                 {movementTitle(m)}
                 {m.provisional === 1 && <small className="badge">provisorio</small>}
               </td>
-              <td className="no-print" data-label="Etiqueta">
+              <td className="no-print" data-label="Comentario">
                 <LabelInput value={m.label ?? ''} fromRule={m.label_source === 'rule'} onCommit={(label) => onEdit(m, { label })} />
               </td>
               <td className="no-print" data-label="Categoría">
@@ -455,97 +483,155 @@ function ExpensesSheet({
   const groups = useMemo(() => groupByCategory(movements ?? [], categories), [movements, categories]);
   if (!movements) return <p className="muted">Cargando…</p>;
   const total = groups.reduce((s, g) => s + g.total, 0);
+  const renderRow = (r: DisplayRow) =>
+    r.type === 'single' ? (
+      <tr key={r.m.id}>
+        <td className="nowrap" data-label="Fecha">{shortDate(r.m.date)}</td>
+        <td className="nowrap small" data-label="Cuenta">{r.m.account_name}</td>
+        <td className="detail-cell">
+          {movementTitle(r.m)}
+          {r.m.provisional === 1 && <small className="badge">provisorio</small>}
+        </td>
+        {/* El comentario editable solo en pantalla; al imprimir queda el texto. */}
+        <td className="small" data-label="Comentario">
+          <span className="no-print">
+            <LabelInput value={r.m.label ?? ''} fromRule={r.m.label_source === 'rule'} onCommit={(label) => onEditOne(r.m, { label })} />
+          </span>
+          <span className="print-only">{r.m.label}</span>
+        </td>
+        <td className="no-print" data-label="Categoría">
+          <CategorySelect value={r.m.category_id} source={r.m.category_source} onChange={(categoryId) => onEditOne(r.m, { categoryId })} />
+        </td>
+        <td className="num amount-cell" data-label="Monto">{clp(r.m.amount)}</td>
+      </tr>
+    ) : (
+      (() => {
+        const ids = r.items.map((m) => m.id);
+        const label = new Set(r.items.map((m) => m.label ?? '')).size === 1 ? r.items[0].label : '';
+        const singleCategory = new Set(r.items.map((m) => m.category_id)).size === 1;
+        // Impreso: todos los comentarios distintos de la nómina, aunque no sean iguales en todos los pagos.
+        const comments = [...new Set(r.items.map((m) => m.label).filter(Boolean))].join(' · ');
+        return (
+          <tr key={r.key}>
+            <td className="nowrap" data-label="Fecha">{shortDate(r.items[0].date)}</td>
+            <td className="nowrap small" data-label="Cuenta">{r.items[0].account_name}</td>
+            <td className="detail-cell">
+              Nómina Pago Fácil · {r.items.length} pagos
+              {r.batchesInDay > 1 && ` · nómina ${r.batch} de ${r.batchesInDay}`}
+            </td>
+            <td className="small" data-label="Comentario">
+              <span className="no-print">
+                <LabelInput
+                  value={label ?? ''}
+                  placeholder={label === '' ? '(varias)' : ''}
+                  onCommit={(l) => onEditAll(ids, { label: l })}
+                />
+              </span>
+              <span className="print-only">{comments}</span>
+            </td>
+            <td className="no-print" data-label="Categoría">
+              <CategorySelect
+                value={singleCategory ? r.items[0].category_id : null}
+                placeholder={singleCategory ? '— Sin categoría —' : '(varias)'}
+                onChange={(categoryId) => onEditAll(ids, { categoryId })}
+              />
+            </td>
+            <td className="num amount-cell" data-label="Monto">{clp(r.items.reduce((s, m) => s + m.amount, 0))}</td>
+          </tr>
+        );
+      })()
+    );
   return (
     <>
       <TotalMismatch total={total} expected={expectedTotal} />
-      <table className="detail">
+      <table className="detail grouped">
         <thead>
           <tr>
             <th>Fecha</th>
             <th>Cuenta</th>
             <th>Detalle</th>
-            <th>Etiqueta</th>
+            <th>Comentario</th>
             <th className="no-print">Categoría</th>
             <th className="num">Monto</th>
           </tr>
         </thead>
-        {groups.map((g) => (
-          <tbody key={String(g.categoryId)} className="category-group">
-            <tr className="group-header">
-              <th colSpan={4}>
-                <span className="dot" style={{ background: g.color ?? 'var(--muted)' }} />
-                {g.name} <small className="muted">· {g.count} mov. · {total ? Math.round((g.total / total) * 100) : 0}%</small>
-              </th>
-              <th className="no-print" />
-              <th className="num">{clp(g.total)}</th>
+        {groups.map((g, i) => {
+          // La cabecera viaja con los primeros movimientos: al imprimir no queda sola al pie de una página.
+          const head = g.rows.slice(0, HEAD_ROWS);
+          const rest = g.rows.slice(HEAD_ROWS);
+          const subtotal = (
+            <tr className="group-subtotal">
+              <td colSpan={4}>Subtotal {g.name}</td>
+              <td className="no-print" />
+              <td className="num">{clp(g.total)}</td>
             </tr>
-            {g.rows.map((r) =>
-              r.type === 'single' ? (
-                <tr key={r.m.id}>
-                  <td className="nowrap" data-label="Fecha">{shortDate(r.m.date)}</td>
-                  <td className="nowrap small" data-label="Cuenta">{r.m.account_name}</td>
-                  <td className="detail-cell">
-                    {movementTitle(r.m)}
-                    {r.m.provisional === 1 && <small className="badge">provisorio</small>}
-                  </td>
-                  {/* La etiqueta editable solo en pantalla; al imprimir queda el texto. */}
-                  <td className="small" data-label="Etiqueta">
-                    <span className="no-print">
-                      <LabelInput value={r.m.label ?? ''} fromRule={r.m.label_source === 'rule'} onCommit={(label) => onEditOne(r.m, { label })} />
-                    </span>
-                    <span className="print-only">{r.m.label}</span>
-                  </td>
-                  <td className="no-print" data-label="Categoría">
-                    <CategorySelect value={r.m.category_id} source={r.m.category_source} onChange={(categoryId) => onEditOne(r.m, { categoryId })} />
-                  </td>
-                  <td className="num amount-cell" data-label="Monto">{clp(r.m.amount)}</td>
+          );
+          return (
+            <Fragment key={String(g.categoryId)}>
+              <tbody className={`category-group category-head ${rest.length ? '' : 'group-end'}`}>
+                <tr className="group-header">
+                  <th colSpan={6}>
+                    <span className="dot" style={{ background: g.color ?? 'var(--muted)' }} />
+                    {g.name} <small className="muted">· {g.count} mov. · {total ? Math.round((g.total / total) * 100) : 0}%</small>
+                  </th>
                 </tr>
-              ) : (
-                (() => {
-                  const ids = r.items.map((m) => m.id);
-                  const label = new Set(r.items.map((m) => m.label ?? '')).size === 1 ? r.items[0].label : '';
-                  const singleCategory = new Set(r.items.map((m) => m.category_id)).size === 1;
-                  return (
-                    <tr key={r.key}>
-                      <td className="nowrap" data-label="Fecha">{shortDate(r.items[0].date)}</td>
-                      <td className="nowrap small" data-label="Cuenta">{r.items[0].account_name}</td>
-                      <td className="detail-cell">
-                        Nómina Pago Fácil · {r.items.length} pagos
-                        {r.batchesInDay > 1 && ` · nómina ${r.batch} de ${r.batchesInDay}`}
-                      </td>
-                      <td className="small" data-label="Etiqueta">
-                        <span className="no-print">
-                          <LabelInput
-                            value={label ?? ''}
-                            placeholder={label === '' ? '(varias)' : ''}
-                            onCommit={(l) => onEditAll(ids, { label: l })}
-                          />
-                        </span>
-                        <span className="print-only">{label}</span>
-                      </td>
-                      <td className="no-print" data-label="Categoría">
-                        <CategorySelect
-                          value={singleCategory ? r.items[0].category_id : null}
-                          placeholder={singleCategory ? '— Sin categoría —' : '(varias)'}
-                          onChange={(categoryId) => onEditAll(ids, { categoryId })}
-                        />
-                      </td>
-                      <td className="num amount-cell" data-label="Monto">{clp(r.items.reduce((s, m) => s + m.amount, 0))}</td>
-                    </tr>
-                  );
-                })()
-              ),
-            )}
-          </tbody>
-        ))}
-        <tfoot>
-          <tr className="grand-total">
-            <td colSpan={4}>Total salió · {movements.length} movimientos</td>
-            <td className="no-print" />
-            <td className="num">{clp(total)}</td>
-          </tr>
-        </tfoot>
+                {head.map(renderRow)}
+                {!rest.length && subtotal}
+              </tbody>
+              {rest.length > 0 && (
+                <tbody className="category-group group-end">
+                  {rest.map(renderRow)}
+                  {subtotal}
+                </tbody>
+              )}
+              {/* Respiro entre burbujas de categoría (en móvil se separan con margen). */}
+              {i < groups.length - 1 && (
+                <tbody className="group-gap-body" aria-hidden="true">
+                  <tr className="group-gap">
+                    <td colSpan={6} />
+                  </tr>
+                </tbody>
+              )}
+            </Fragment>
+          );
+        })}
       </table>
+
+      {/* Cierre de la hoja: una línea por categoría y el total de lo que salió. */}
+      <section className="card category-summary">
+        <h2>Resumen por categoría</h2>
+        <table className="compact">
+          <thead>
+            <tr>
+              <th>Categoría</th>
+              <th className="num">Movimientos</th>
+              <th className="num">%</th>
+              <th className="num">Monto</th>
+            </tr>
+          </thead>
+          <tbody>
+            {groups.map((g) => (
+              <tr key={String(g.categoryId)}>
+                <td>
+                  <span className="dot" style={{ background: g.color ?? 'var(--muted)' }} />
+                  {g.name}
+                </td>
+                <td className="num">{g.count}</td>
+                <td className="num">{total ? Math.round((g.total / total) * 100) : 0}%</td>
+                <td className="num">{clp(g.total)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="grand-total">
+              <td>Total salió</td>
+              <td className="num">{movements.length}</td>
+              <td className="num">{total ? '100%' : ''}</td>
+              <td className="num">{clp(total)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </section>
     </>
   );
 }
@@ -588,5 +674,97 @@ function Figure({ label, value, tone }: { label: string; value: string; tone?: '
       <span className="muted small">{label}</span>
       <strong className={tone}>{value}</strong>
     </div>
+  );
+}
+
+// ---------- Comentario del informe ----------
+
+/** Comentario por período y alcance de cuentas. Se edita en pantalla; al imprimir queda solo el texto. */
+export function NoteCard({ note, onSave }: { note: ReportNote | null; onSave: (text: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const startEdit = () => {
+    setText(note?.text ?? '');
+    setFailed(false);
+    setEditing(true);
+  };
+
+  const save = async (value: string) => {
+    setSaving(true);
+    setFailed(false);
+    try {
+      await onSave(value.trim());
+      setEditing(false);
+    } catch {
+      setFailed(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (editing) {
+    return (
+      <section className="card note">
+        <h2>Comentario del informe</h2>
+        <textarea
+          className="note-input"
+          aria-label="Comentario del informe"
+          placeholder="Anotaciones sobre el período: qué explica el resultado, algo a recordar…"
+          maxLength={NOTE_MAX}
+          autoFocus
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+        <div className="note-actions">
+          <span className="muted small">
+            {text.length}/{NOTE_MAX}
+          </span>
+          <button type="button" onClick={() => setEditing(false)} disabled={saving}>
+            Cancelar
+          </button>
+          <button type="button" className="primary" onClick={() => save(text)} disabled={saving}>
+            Guardar
+          </button>
+        </div>
+        {failed && <p className="error">No se pudo guardar el comentario. Intenta de nuevo.</p>}
+      </section>
+    );
+  }
+
+  // Sin comentario: la tarjeta solo se ve en pantalla (no ensucia el PDF).
+  if (!note) {
+    return (
+      <section className="card note no-print">
+        <h2>Comentario del informe</h2>
+        <p className="muted note-text">Sin comentario para este período.</p>
+        <div className="note-actions">
+          <button type="button" onClick={startEdit}>
+            Agregar comentario
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="card note">
+      <h2>Comentario del informe</h2>
+      <p className="note-text">{note.text}</p>
+      <p className="muted small note-meta no-print">
+        Guardado el {shortDate(note.updated_at.slice(0, 10))}
+        {note.username ? ` por ${note.username}` : ''}.
+      </p>
+      <div className="note-actions no-print">
+        <button type="button" onClick={startEdit}>
+          Editar
+        </button>
+        <button type="button" className="danger" onClick={() => save('')} disabled={saving}>
+          Borrar
+        </button>
+      </div>
+    </section>
   );
 }

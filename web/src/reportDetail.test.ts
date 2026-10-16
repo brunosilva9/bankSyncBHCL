@@ -41,7 +41,7 @@ describe('detalle del informe', () => {
 });
 
 describe('topPayroll', () => {
-  const line = (date: string, total: number, count = 1) => ({ accountId: 1, accountName: 'Cuenta Uno', date, batch: 1, batchesInDay: 1, total, count });
+  const line = (date: string, total: number, count = 1) => ({ accountId: 1, accountName: 'Cuenta Uno', date, batch: 1, batchesInDay: 1, total, count, comments: [] });
 
   it('muestra las nóminas más grandes por fecha y suma el resto', () => {
     const r = topPayroll([line('2026-10-13', 500, 20), line('2026-10-09', 10), line('2026-10-06', 300, 12), line('2026-10-05', 20)], 2);

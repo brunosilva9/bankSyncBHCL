@@ -1,6 +1,6 @@
 # SyncBanks
 
-Vista global de los movimientos de las cuentas de Banco de Chile: importa las cartolas `.txt`, categoriza y etiqueta cada movimiento, y genera un informe del tipo *"partimos el viernes con $X, entró $Y, salió $Z en esto, y quedamos con $W"*.
+Vista global de los movimientos de las cuentas de Banco de Chile: importa las cartolas `.txt`, categoriza y comenta cada movimiento, y genera un informe del tipo *"partimos el viernes con $X, entró $Y, salió $Z en esto, y quedamos con $W"*.
 
 - **Backend:** Node + Express + SQLite cifrado (SQLCipher vía `better-sqlite3-multiple-ciphers`).
 - **Frontend:** React + Vite.
@@ -47,23 +47,31 @@ Cada cartola trae los últimos ~45 días, así que se traslapan. Además el arch
 
 Al final se verifica que el saldo de cada cartola calce con los movimientos cargados. Si no calza, falta una cartola entre medio y se muestra una advertencia.
 
-### Categorías, etiquetas y reglas
+### Categorías, comentarios y reglas
 
 - **Categoría** (Sueldos, Proveedores, Oficina…): se asigna automáticamente cuando se puede (nómina, gastos bancarios, línea de crédito, traspasos internos) o a mano.
-- **Etiqueta**: texto libre, por ejemplo «Gastos Pedro». Sirve para agrupar gastos que cruzan categorías.
-- **Reglas**: al cambiar la categoría o la etiqueta de un movimiento, la app ofrece aplicarla a todos los de esa contraparte y a los de próximas cartolas. Las ediciones manuales nunca se pisan.
+- **Comentario**: texto libre, por ejemplo «Gastos Pedro». Sirve para agrupar gastos que cruzan categorías.
+- **Reglas**: al cambiar la categoría o el comentario de un movimiento, la app ofrece aplicarla a todos los de esa contraparte y a los de próximas cartolas. Las ediciones manuales nunca se pisan.
 
-Se puede categorizar y etiquetar directamente desde el informe (hojas *Entradas* y *Gastos*, en pantalla; al imprimir no aparecen los controles de edición).
+Se puede categorizar y comentar directamente desde el informe (hojas *Entradas* y *Gastos*, en pantalla; al imprimir no aparecen los controles de edición).
+
+En la hoja *Gastos* cada categoría tiene su cabecera arriba y su subtotal abajo, y la hoja cierra con un **resumen por categoría** con el total de lo que salió (el total no se repite al pie de cada página). Al imprimir, la cabecera va siempre junto a sus primeros 4 movimientos: si no caben al final de la página, pasan juntos a la siguiente. Los avisos de cobertura de cartolas (por ejemplo, «la última cartola cargada llega hasta…») se ven en pantalla, pero no salen en el PDF.
+
+### Comentario del informe
+
+En la hoja *Resumen* se puede escribir un **comentario por período y conjunto de cuentas** (hasta 500 caracteres), para anotar qué explica el resultado. Queda guardado para ese período y ese alcance de cuentas: el mismo rango visto con otra cuenta tiene su propio comentario. Sale impreso en el PDF del informe y en pantalla se puede editar o borrar.
 
 ### Pago Fácil (nómina)
 
 En la cartola aparece como una línea por trabajador (`Pago Fácil Bch: <RUT>`). La app las agrupa en un **lote de nómina** por día y cuenta. En *Configuración → Trabajadores* se le puede poner nombre a cada RUT.
 
+Cada nómina es un bloque de pagos seguidos en la cartola; si entre medio hay otro movimiento, son nóminas distintas. Si dos nóminas se cargaron una tras otra, la cartola no dice dónde termina una y empieza la otra: en *Nóminas* se abre la nómina y se usa **✂ Cortar aquí** en la última persona de la primera; las de abajo pasan a otra nómina (si hay más de dos, se corta de nuevo). **Unir con la de abajo** deshace el corte. El corte queda guardado, sobrevive a nuevas importaciones y se refleja en el informe.
+
 ### Traspasos internos
 
 En *Configuración → Cuentas*, el campo «Aparece como» indica cómo se ve cada empresa en las cartolas de las otras. Un traspaso se marca como **Traspaso interno** solo si tiene su pareja en otra cuenta cargada: un cargo en una cuenta y un abono en la otra, el mismo día y por el mismo monto. Esos no cuentan como ingreso ni como gasto en la vista global.
 
-Un traspaso desde o hacia una cuenta propia que no se carga (por ejemplo, otro banco) no tiene pareja, así que cuenta como ingreso o gasto normal y se identifica con una etiqueta. Así no hace falta importar más cuentas por uno o dos movimientos.
+Un traspaso desde o hacia una cuenta propia que no se carga (por ejemplo, otro banco) no tiene pareja, así que cuenta como ingreso o gasto normal y se identifica con un comentario. Así no hace falta importar más cuentas por uno o dos movimientos.
 
 ### Línea de crédito
 
@@ -78,11 +86,11 @@ La línea de crédito es otra cuenta en el banco, pero cada giro ("Transferencia
 BancoEstado no entrega `.txt`. Se importan sus Excel (`.xlsx`), que traen el **saldo de cada movimiento**, así que no hay que reconstruirlo. Hay dos formatos y se reconocen solos:
 
 - **Cartola histórica** (consolidada y numerada; ej. N° 040 = una semana): es la definitiva.
-- **Cartola en línea** (provisoria): lo ocurrido desde la última consolidada. Sus movimientos quedan marcados como *provisorios*. Una cartola en línea nueva reemplaza a la anterior completa, y una consolidada reemplaza lo provisorio de su período. Las categorías, etiquetas y notas puestas a mano se traspasan al movimiento consolidado del mismo día, sentido y monto.
+- **Cartola en línea** (provisoria): lo ocurrido desde la última consolidada. Sus movimientos quedan marcados como *provisorios*. Una cartola en línea nueva reemplaza a la anterior completa, y una consolidada reemplaza lo provisorio de su período. Las categorías, comentarios y notas puestas a mano se traspasan al movimiento consolidado del mismo día, sentido y monto.
 
 Las transferencias de BancoEstado traen el RUT de la contraparte («Transferencia otro banco a rut 11111111-1»). Por eso los traspasos internos también se parean por RUT, y las cuentas de una misma empresa (mismo RUT, en distintos bancos) comparten nombres y alias. Entre bancos distintos se acepta hasta 3 días de diferencia entre la salida y la llegada. Los envíos hechos por la banca en línea aparecen como «TRANSFERENCIA FONDOS INTERNET», sin contraparte; igual se reconocen y se parean cuando la otra cuenta nombra a la empresa que los emitió.
 
-Un traspaso con pareja confirmada siempre se marca como interno, aunque antes se haya categorizado a mano (por ejemplo, cuando la otra cuenta aún no se cargaba). Si no fuera así, se contaría dos veces. La etiqueta se conserva.
+Un traspaso con pareja confirmada siempre se marca como interno, aunque antes se haya categorizado a mano (por ejemplo, cuando la otra cuenta aún no se cargaba). Si no fuera así, se contaría dos veces. El comentario se conserva.
 
 ### Fechas
 
@@ -97,7 +105,7 @@ El `.txt` y el `.xls` traen solo la fecha contable, sin hora. Lo que se hace des
 
 ## Respaldo y traspaso al servidor
 
-Todos los datos (movimientos, categorías, etiquetas, reglas, nombres de trabajadores y usuarios) viven en `data/syncbanks.db`, cifrada con `DB_KEY`. **No van a git.**
+Todos los datos (movimientos, categorías, comentarios, reglas, nombres de trabajadores y usuarios) viven en `data/syncbanks.db`, cifrada con `DB_KEY`. **No van a git.**
 
 - `npm run backup` genera una copia completa y consistente en `backups/`, cifrada con la misma clave. Se puede correr con la app abierta.
 - No basta con copiar `syncbanks.db` a mano: los cambios recientes quedan en `syncbanks.db-wal` hasta que SQLite los consolida.

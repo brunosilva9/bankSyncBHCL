@@ -130,7 +130,7 @@ export function MovementsPage({ params }: { params: Record<string, string> }) {
             setFilter({ q: search || undefined });
           }}
         >
-          <input type="search" placeholder="Buscar nombre, etiqueta…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input type="search" placeholder="Buscar nombre, comentario…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </form>
         <label className="check">
           <input type="checkbox" checked={params.excludeInternal === '1'} onChange={(e) => setFilter({ excludeInternal: e.target.checked ? 1 : undefined })} />
@@ -143,7 +143,7 @@ export function MovementsPage({ params }: { params: Record<string, string> }) {
         {(params.label || params.kind || params.categoryKey) && (
           <button className="chip active" onClick={() => setFilter({ label: undefined, kind: undefined, batch: undefined, categoryKey: undefined })}>
             {params.label
-              ? `Etiqueta: ${params.label}`
+              ? `Comentario: ${params.label}`
               : params.kind === 'payroll'
                 ? 'Solo nómina'
                 : params.kind === 'credit_line'
@@ -163,7 +163,7 @@ export function MovementsPage({ params }: { params: Record<string, string> }) {
       {selected.size > 0 && (
         <div className="bulkbar">
           <strong>{selected.size} seleccionados</strong>
-          <LabelInput value="" placeholder="Asignar etiqueta…" onCommit={(label) => label && editMany([...selected], { label })} />
+          <LabelInput value="" placeholder="Asignar comentario…" onCommit={(label) => label && editMany([...selected], { label })} />
           <CategorySelect value={null} placeholder="Asignar categoría…" onChange={(categoryId) => editMany([...selected], { categoryId })} />
           <button onClick={() => setSelected(new Set())}>Quitar selección</button>
         </div>
@@ -180,7 +180,7 @@ export function MovementsPage({ params }: { params: Record<string, string> }) {
               <th className="num">Cargo</th>
               <th className="num">Abono</th>
               <th className="num">Saldo</th>
-              <th>Etiqueta</th>
+              <th>Comentario</th>
               <th>Categoría</th>
             </tr>
           </thead>

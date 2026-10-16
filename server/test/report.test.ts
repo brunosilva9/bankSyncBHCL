@@ -73,13 +73,19 @@ describe('buildReport', () => {
   it('agrupa la nómina de Pago Fácil', () => {
     const r = buildReport(db, { from: '2026-10-01', to: '2026-10-31' });
     expect(r.payroll).toEqual([
-      { accountId: idA, accountName: 'Agricola Uno Spa', date: '2026-10-12', batch: 1, batchesInDay: 1, total: 1000, count: 2 },
+      { accountId: idA, accountName: 'Agricola Uno Spa', date: '2026-10-12', batch: 1, batchesInDay: 1, total: 1000, count: 2, comments: [] },
     ]);
     const cats = db.prepare("SELECT DISTINCT c.name FROM movements m JOIN categories c ON c.id = m.category_id WHERE m.kind = 'payroll'").all();
     expect(cats).toEqual([{ name: 'Sueldos y nómina' }]);
   });
 
-  it('aplica reglas de etiqueta por contraparte', () => {
+  it('la nómina del informe trae los comentarios de sus pagos, sin repetir', () => {
+    db.prepare("UPDATE movements SET label = 'Cosecha', label_source = 'manual' WHERE kind = 'payroll'").run();
+    db.prepare("UPDATE movements SET label = 'Anticipo', label_source = 'manual' WHERE kind = 'payroll' AND amount = 600").run();
+    expect(buildReport(db, { from: '2026-10-01', to: '2026-10-31' }).payroll[0].comments).toEqual(['Cosecha', 'Anticipo']);
+  });
+
+  it('aplica reglas de comentario por contraparte', () => {
     db.prepare("INSERT INTO rules (match_type, pattern, label) VALUES ('counterparty', 'Pedro Gonzalez Rojas', 'Gastos Pedro')").run();
     recategorize(db);
     expect(db.prepare("SELECT label, label_source FROM movements WHERE counterparty = 'Pedro Gonzalez Rojas'").all()).toEqual([

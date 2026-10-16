@@ -94,7 +94,7 @@ export function ImportPage() {
               {r.result.statement?.kind === 'provisional' && (
                 <p className="info">
                   Cartola en línea: sus movimientos quedan como <strong>provisorios</strong> y se reemplazan cuando importes la próxima cartola
-                  consolidada (tus categorías y etiquetas se traspasan).
+                  consolidada (tus categorías y comentarios se traspasan).
                 </p>
               )}
               {r.result.replacedProvisional > 0 && <p>Reemplazó {r.result.replacedProvisional} movimientos provisorios.</p>}

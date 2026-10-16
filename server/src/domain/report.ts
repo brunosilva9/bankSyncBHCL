@@ -185,7 +185,17 @@ export function buildReport(db: DB, params: ReportParams) {
 
 /** Pago Fácil aparece como una línea por trabajador; se agrupan por nómina (bloque contiguo del día). */
 function payrollBatches(rows: Row[], accounts: Array<{ id: number; name: string }>) {
-  type Batch = { accountId: number; accountName: string; date: string; batch: number; batchesInDay: number; total: number; count: number };
+  type Batch = {
+    accountId: number;
+    accountName: string;
+    date: string;
+    batch: number;
+    batchesInDay: number;
+    total: number;
+    count: number;
+    /** Comentarios distintos puestos a los pagos de la nómina, en el orden de la cartola. */
+    comments: string[];
+  };
   const map = new Map<string, Batch>();
   for (const r of rows.filter((r) => r.kind === 'payroll')) {
     const batch = r.payroll_batch ?? 1;
@@ -198,9 +208,11 @@ function payrollBatches(rows: Row[], accounts: Array<{ id: number; name: string 
       batchesInDay: 0,
       total: 0,
       count: 0,
+      comments: [],
     };
     b.total += r.amount;
     b.count++;
+    if (r.label && !b.comments.includes(r.label)) b.comments.push(r.label);
     map.set(k, b);
   }
   const batches = [...map.values()];

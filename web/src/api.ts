@@ -96,6 +96,8 @@ export interface Movement {
   balance_after: number | null;
   provisional: 0 | 1;
   payroll_batch: number | null;
+  /** 1 si este pago es el último de su nómina (corte manual). */
+  payroll_split_after: number;
   system_key: string | null;
 }
 
@@ -200,7 +202,17 @@ export interface Report {
     availableOpening: number;
     availableClosing: number;
   };
-  payroll: Array<{ accountId: number; accountName: string; date: string; batch: number; batchesInDay: number; total: number; count: number }>;
+  payroll: Array<{
+    accountId: number;
+    accountName: string;
+    date: string;
+    batch: number;
+    batchesInDay: number;
+    total: number;
+    count: number;
+    /** Comentarios distintos de los pagos de la nómina. */
+    comments: string[];
+  }>;
   uncategorizedCount: number;
   warnings: string[];
   /** Comentario guardado para este período y estas cuentas. */

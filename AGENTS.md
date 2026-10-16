@@ -7,7 +7,7 @@ la persona que usa la app; **no** duplicar aquí su contenido, solo lo necesario
 ## Qué es SyncBanks
 
 Vista global de los movimientos de cuentas de Banco de Chile y BancoEstado. Importa cartolas
-(`.txt` de Banco de Chile, `.xlsx` de BancoEstado), categoriza y etiqueta movimientos, y genera un
+(`.txt` de Banco de Chile, `.xlsx` de BancoEstado), categoriza y comenta movimientos, y genera un
 informe en 3 hojas (resumen, entradas, gastos) listo para PDF.
 
 - **Backend:** Node + Express + SQLite cifrado (SQLCipher vía `better-sqlite3-multiple-ciphers`).
@@ -75,7 +75,10 @@ web/src/
 - **`DB_KEY`** es la única forma de abrir la base; si se pierde, los datos no se recuperan. No
   imprimirla ni loguearla.
 - Toda escritura en la API exige el header `x-requested-with: syncbanks` (protección CSRF).
-- Las ediciones manuales de categoría/etiqueta/nota **nunca** se pisan por las reglas automáticas.
+- Las ediciones manuales de categoría/comentario/nota **nunca** se pisan por las reglas automáticas.
+  Única excepción, intencional: un movimiento con pareja en otra cuenta propia pasa a *Traspaso
+  interno* aunque su categoría sea manual (el comentario se conserva); si no, la plata se cuenta dos
+  veces. Ver `recategorize` en `server/src/domain/categorize.ts`.
 
 ## Flujo de trabajo
 
@@ -92,24 +95,35 @@ web/src/
 
 ### En curso
 
-- [ ] **Comentario del informe (nota por período y cuentas).** Backend listo (`report_notes` en
-      `server/src/db.ts`, `GET /api/report` devuelve `note`, `PUT /api/report-note` la guarda; tests en
-      `server/test/api.test.ts`). Tipos en `web/src/api.ts` (`ReportNote`, `NOTE_MAX`).
-      **Falta:** la UI en `web/src/pages/ReportPage.tsx` para mostrar, editar (máx. `NOTE_MAX`
-      caracteres) y borrar la nota, y su test.
+- (vacío)
 
 ### Pendiente
 
 - [ ] **Verificar la consolidación de la cartola de BancoEstado (N° 041).** Confirmar con la cartola
       041 real cómo cambian los movimientos al consolidarse (descripción, N° de operación, fecha). Hoy
-      se reemplazan por período y las ediciones manuales se traspasan por día, sentido y monto.
+      se reemplazan por período y las ediciones manuales se traspasan por día, sentido y monto. Ojo
+      además con el traspaso genérico `TRANSFERENCIA FONDOS INTERNET`
+      ([server/src/domain/classify.ts](server/src/domain/classify.ts)): si al consolidarse cambia la
+      redacción, puede dejar de parearse como interno.
       Ver `TODO` en [server/src/domain/importer.ts](server/src/domain/importer.ts).
-- [ ] **Cobertura de tests de la web:** hoy solo hay tests de utilidades (`format`, `payroll`,
-      `reportDetail`); no hay tests de componentes/páginas.
+- [ ] **Cobertura de tests de la web:** hoy hay tests de utilidades (`format`, `payroll`,
+      `reportDetail`) y el primero de componente/página (`ReportPage.test.tsx`, la tarjeta de
+      comentario); faltan los de las demás páginas.
 
 ### Hecho
 
-- (vacío)
+- **Separar nóminas a mano.** `movements.payroll_split_after` marca el último pago de una nómina;
+      `recomputePayrollBatches` abre una nómina nueva en ese pago (recorre de abajo hacia arriba).
+      `POST /api/movements/:id/payroll-split` y botones *Cortar aquí* / *Unir con la de abajo* en
+      `PayrollPage`. Test en `server/test/api.test.ts`.
+- **Hoja Gastos para imprimir.** Subtotal al pie de cada categoría, espacio entre categorías y cabecera
+      pegada a sus primeros `HEAD_ROWS` (4) movimientos (`tbody.category-head` con `break-inside: avoid`).
+      Los avisos de cobertura del resumen son `no-print`. Al final, *Resumen por categoría* con el total; en
+      impresión `tfoot` es `table-row-group` para que el total no se repita en cada página.
+- **Comentario del informe (nota por período y cuentas).** UI en
+      [web/src/pages/ReportPage.tsx](web/src/pages/ReportPage.tsx) (`NoteCard`): muestra, edita (máx.
+      `NOTE_MAX`) y borra el comentario en la hoja *Resumen*; sale impreso en el PDF. Test en
+      `web/src/pages/ReportPage.test.tsx` (`web/src/test-setup.ts` ahora limpia el DOM entre tests).
 
 ## Sugerencias de interfaz (a evaluar, no son tareas comprometidas)
 

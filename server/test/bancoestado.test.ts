@@ -132,7 +132,7 @@ describe('BancoEstado', () => {
     expect(internal).toEqual([{ description: 'Traspaso De: Transportes Xy SPA' }, { description: 'Transferencia otro banco a rut 11111111-1' }]);
   });
 
-  it('al cargar la otra cuenta, un abono categorizado a mano pasa a interno (conservando la etiqueta)', async () => {
+  it('al cargar la otra cuenta, un abono categorizado a mano pasa a interno (conservando el comentario)', async () => {
     const bch = importCartola(
       db,
       await parseStatementFile(
@@ -169,7 +169,7 @@ describe('BancoEstado', () => {
       'a.txt',
       null,
     );
-    db.prepare("UPDATE accounts SET name = 'Agricola Santa Sara' WHERE id = ?").run(bd.accountId);
+    db.prepare("UPDATE accounts SET name = 'Agricola Uno Spa' WHERE id = ?").run(bd.accountId);
 
     recategorize(db);
     const cats = db.prepare('SELECT m.account_id, c.system_key FROM movements m JOIN categories c ON c.id = m.category_id ORDER BY m.account_id').all();

@@ -158,6 +158,9 @@ const ADDED_COLUMNS: Array<[table: string, column: string, definition: string]> 
   ['movements', 'counterparty_rut', 'TEXT'],
   // Pago Fácil: n° de bloque contiguo dentro del día (1 = el más temprano). Cada bloque es una nómina.
   ['movements', 'payroll_batch', 'INTEGER'],
+  // Corte manual: este pago es el último de su nómina; los de abajo en la cartola son otra nómina.
+  // Sirve cuando dos nóminas se cargaron seguidas y en la cartola aparecen como un solo bloque.
+  ['movements', 'payroll_split_after', 'INTEGER NOT NULL DEFAULT 0'],
 ];
 
 function migrate(db: DB) {

@@ -483,16 +483,41 @@ main {
   background: var(--info-bg);
 }
 
+/* ----- Comentario del informe ----- */
+.note-text {
+  white-space: pre-wrap;
+  margin: 0;
+}
+.note-meta {
+  margin: 0.5rem 0 0;
+}
+.note-input {
+  width: 100%;
+  min-height: 5.5rem;
+  resize: vertical;
+  margin-top: 0.25rem;
+}
+.note-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.note-actions .muted {
+  margin-right: auto;
+}
+
 /* ----- Hojas del informe ----- */
 .sheet {
-  scroll-margin-top: 4.5rem;
+  scroll-margin-top: calc(var(--topbar-h, 52px) + var(--report-toolbar-h, 3.5rem) + 0.75rem);
 }
 .sheet + .sheet {
   margin-top: 2.5rem;
   padding-top: 2rem;
   border-top: 1px dashed var(--border);
 }
-/* Contenido que solo se ve al imprimir (p. ej. la etiqueta, que en pantalla es editable). */
+/* Contenido que solo se ve al imprimir (p. ej. el comentario, que en pantalla es editable). */
 .print-only {
   display: none;
 }
@@ -602,7 +627,8 @@ table.detail .group-header th {
   position: static;
   padding-top: 0.6rem;
 }
-table.detail .dot {
+table.detail .dot,
+.category-summary .dot {
   display: inline-block;
   width: 0.7rem;
   height: 0.7rem;
@@ -610,13 +636,88 @@ table.detail .dot {
   margin-right: 0.45rem;
   vertical-align: baseline;
 }
-table.detail .grand-total td {
+table.detail .grand-total td,
+.category-summary .grand-total td {
   font-weight: 700;
   font-size: 1.05rem;
   border-top: 2px solid var(--text);
 }
 table.detail .badge {
   margin-left: 0.4rem;
+}
+/* Resumen de gastos: recuadro con borde marcado (negro al imprimir) y esquinas redondeadas. */
+.card.category-summary {
+  margin-top: 1.25rem;
+  break-inside: avoid;
+  border: 2px solid var(--text);
+  border-radius: 14px;
+  padding: 0.9rem 1.1rem 0.6rem;
+}
+.category-summary h2 {
+  margin: 0 0 0.6rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 2px solid var(--text);
+}
+.category-summary table {
+  width: 100%;
+}
+.category-summary tbody tr:nth-child(even) td {
+  background: var(--info-bg);
+}
+.category-summary tbody td:first-child {
+  border-radius: 6px 0 0 6px;
+}
+.category-summary tbody td:last-child {
+  border-radius: 0 6px 6px 0;
+}
+/* Subtotal al pie de cada categoría y un respiro antes de la siguiente. */
+table.detail .group-subtotal td {
+  font-weight: 700;
+  border-top: 1px solid var(--text);
+  border-bottom: none;
+}
+/* Gastos: cada categoría es una burbuja propia (borde y esquinas redondeadas), separada de la
+   siguiente por una fila vacía. En móvil se arma distinto (ver más abajo). */
+@media print, screen and (min-width: 641px) {
+  table.detail.grouped {
+    border-collapse: separate;
+    border-spacing: 0;
+    background: none;
+    border: none;
+    border-radius: 0;
+  }
+  table.detail.grouped tbody.category-group > tr > * {
+    background: var(--surface);
+  }
+  table.detail.grouped tbody.category-group > tr:not(.group-header):hover > td {
+    background: var(--row-hover);
+  }
+  table.detail.grouped tbody.category-group > tr > :first-child {
+    border-left: 1px solid var(--border);
+  }
+  table.detail.grouped tbody.category-group > tr > :last-child {
+    border-right: 1px solid var(--border);
+  }
+  table.detail.grouped .group-header th {
+    background: var(--info-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px 12px 0 0;
+  }
+  table.detail.grouped .group-subtotal td {
+    border-bottom: 1px solid var(--border);
+  }
+  table.detail.grouped .group-subtotal td:first-child {
+    border-bottom-left-radius: 12px;
+  }
+  table.detail.grouped .group-subtotal td:last-child {
+    border-bottom-right-radius: 12px;
+  }
+  table.detail.grouped tr.group-gap td {
+    height: 1rem;
+    padding: 0;
+    border: none;
+    background: none;
+  }
 }
 /* En móvil la tabla de detalle se vuelve tarjetas: una por movimiento. */
 @media screen and (max-width: 640px) {
@@ -632,8 +733,11 @@ table.detail .badge {
   table.detail tbody.category-group {
     display: block;
   }
-  table.detail tbody.category-group {
+  table.detail tbody.group-end {
     margin-bottom: 1.1rem;
+  }
+  table.detail tbody.group-gap-body {
+    display: none;
   }
   /* Barra de la categoría, arriba de sus movimientos. */
   table.detail .group-header {
@@ -675,9 +779,22 @@ table.detail .badge {
     border-radius: 0;
     margin-bottom: 0;
   }
-  table.detail tbody.category-group tr:not(.group-header):last-child {
+  table.detail tbody.group-end tr.group-subtotal {
     border-radius: 0 0 12px 12px;
     margin-bottom: 0.6rem;
+  }
+  /* El subtotal cierra la categoría: nombre a la izquierda, monto a la derecha. */
+  table.detail tbody tr.group-subtotal {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    background: var(--info-bg);
+  }
+  table.detail tbody tr.group-subtotal td {
+    border: none;
+  }
+  table.detail tr.group-subtotal td:empty {
+    display: none;
   }
   table.detail tbody tr:not(.group-header) td {
     display: flex;
@@ -766,6 +883,15 @@ table.compact tfoot td {
   align-items: center;
   flex-wrap: wrap;
   margin-bottom: 0.75rem;
+}
+/* Informe: filtros e Imprimir quedan fijos bajo la barra superior al hacer scroll. */
+.report > .toolbar {
+  position: sticky;
+  top: var(--topbar-h, 52px);
+  z-index: 9;
+  background: var(--bg);
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
 }
 .range {
   display: flex;
@@ -1385,6 +1511,21 @@ input[type='color'] {
   }
   table.detail .group-header {
     break-after: avoid;
+  }
+  /* Cabecera + primeros movimientos van juntos: si no caben al final de la hoja, pasan a la siguiente. */
+  table.detail tbody.category-head {
+    break-inside: avoid;
+  }
+  table.detail tbody.category-head tr:nth-child(-n + 4) {
+    break-after: avoid;
+  }
+  /* El total va una sola vez al final, no repetido al pie de cada página. */
+  table.detail tfoot {
+    display: table-row-group;
+  }
+  /* El subtotal no queda solo al comienzo de una hoja. */
+  table.detail .group-subtotal {
+    break-before: avoid;
   }
   a {
     color: inherit;

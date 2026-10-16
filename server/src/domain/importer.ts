@@ -330,8 +330,8 @@ export function checkBalances(db: DB, accountId?: number): string[] {
  */
 export function recomputePayrollBatches(db: DB, accountId: number) {
   const rows = db
-    .prepare('SELECT id, date, kind FROM movements WHERE account_id = ? ORDER BY date ASC, seq DESC')
-    .all(accountId) as Array<{ id: number; date: string; kind: string }>;
+    .prepare('SELECT id, date, kind, payroll_split_after FROM movements WHERE account_id = ? ORDER BY date ASC, seq DESC')
+    .all(accountId) as Array<{ id: number; date: string; kind: string; payroll_split_after: number }>;
   const update = db.prepare('UPDATE movements SET payroll_batch = ? WHERE id = ?');
   let date = '';
   let batch = 0;
@@ -343,7 +343,9 @@ export function recomputePayrollBatches(db: DB, accountId: number) {
       inBlock = false;
     }
     if (r.kind === 'payroll') {
-      if (!inBlock) batch++;
+      // Se recorre de abajo hacia arriba de la cartola: un pago marcado como "último de su nómina"
+      // abre una nómina nueva respecto de los que están debajo de él.
+      if (!inBlock || r.payroll_split_after) batch++;
       inBlock = true;
       update.run(batch, r.id);
     } else {

@@ -50,6 +50,7 @@ export interface PayrollLine {
   batchesInDay: number;
   total: number;
   count: number;
+  comments: string[];
 }
 
 /**

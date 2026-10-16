@@ -1,4 +1,4 @@
-# Synopsis — Informe técnico
+# SyncBanks — Informe técnico
 
 Documento técnico de SyncBanks: cómo está construida la aplicación, qué tecnologías usa y cómo se
 asegura que cada pieza esté conectada de punta a punta (importar → clasificar → informar).
@@ -10,7 +10,7 @@ asegura que cada pieza esté conectada de punta a punta (importar → clasificar
 
 SyncBanks es una aplicación **web autocontenida** (monorepo) que da una vista global de los
 movimientos de varias cuentas bancarias (Banco de Chile y BancoEstado). Importa cartolas, clasifica
-automáticamente cada movimiento, permite ajustar categorías/etiquetas a mano y emite un informe de 3
+automáticamente cada movimiento, permite ajustar categorías/comentarios a mano y emite un informe de 3
 hojas (Resumen, Entradas, Gastos) listo para imprimir en PDF.
 
 Es una app de un solo servidor: el mismo proceso **Express** sirve la **API** y, en producción, los
@@ -130,10 +130,13 @@ calcula en `buildReport`.
   (`transfer_in/out`, `payroll`, `card_payment`, `credit_line`, `loan_payment`, `bank_fee`,
   `cheque`, `atm`, `other`) y la **contraparte** (nombre o RUT). Normaliza nombres y decide si dos
   nombres son la misma persona (la cartola corta a 45 caracteres, por eso compara prefijos).
-- **`categorize.ts`** — Recalcula categoría/etiqueta de los movimientos **editados automáticamente**,
+- **`categorize.ts`** — Recalcula categoría/comentario de los movimientos **editados automáticamente**,
   con prioridad: traspaso interno detectado > reglas del usuario (la más nueva gana) > categoría de
   sistema según el tipo. Detecta **traspasos internos** pareando un cargo y un abono entre cuentas
-  propias por nombre/RUT y monto (hasta 3 días entre bancos). Las ediciones **manuales nunca se pisan**.
+  propias por nombre/RUT y monto, con hasta 3 días de diferencia (prefiere la fecha más cercana). Las
+  ediciones **manuales no se pisan**, con una excepción: si un movimiento categorizado a mano resulta
+  tener pareja en otra cuenta propia, pasa a *Traspaso interno* (conserva su comentario), porque si no la
+  misma plata se contaría dos veces.
 - **`importer.ts`** — Carga una cartola sin duplicar. Compara **día por día como multiconjunto** (hay
   movimientos idénticos legítimos y el archivo no trae un ID). Reconstruye el saldo por movimiento
   (Banco de Chile no lo trae) y **verifica** que cada saldo descargado calce; si no, avisa que falta
@@ -156,7 +159,8 @@ calcula en `buildReport`.
   numerada) y *Cartola en Línea* (provisoria). Ubica las columnas por el encabezado, reconoce hojas
   `Resumen` + `Movimientos`/`Registros`, y **cada fila trae su saldo**.
 - **`index.ts`** — `parseStatementFile` reconoce el formato por el **contenido** (los `.xlsx` son ZIP,
-  empiezan con `PK`), no por el nombre del archivo.
+  empiezan con `PK`), no por el nombre del archivo. El `.xls` antiguo de Banco de Chile se rechaza con
+  un mensaje que pide el `.txt`.
 
 ### 4.7 CLI (`server/src/cli/`)
 
@@ -170,13 +174,14 @@ correr con la app abierta).
   manda `credentials: 'same-origin'` y avisa a la app (`setUnauthorizedHandler`) ante un 401 para
   volver al login. Define los **tipos espejo** de lo que devuelve el server.
 - **`web/src/router.ts`** — Router mínimo por **hash** (`#/informe?from=...`), sin dependencias.
-- **`web/src/data.tsx`** — `DataProvider` (Context) carga una vez cuentas, categorías y etiquetas, y
-  expone `useFetch` para datos por pantalla (cachea por URL y recarga cuando cambia la clave).
+- **`web/src/data.tsx`** — `DataProvider` (Context) carga una vez cuentas, categorías y comentarios, y
+  expone `useFetch` para datos por pantalla (sin caché: vuelve a pedir cuando cambia la URL o al llamar
+  `refresh`).
 - **`web/src/App.tsx`** — Decide entre login y la app; arma la barra de navegación y monta la página
   según la ruta.
 - **Páginas** (`web/src/pages/`): `LoginPage`, `ImportPage` (sube archivos), `MovementsPage` (lista
-  filtrable y edición de categoría/etiqueta/nota), `PayrollPage` (nóminas por trabajador),
-  `ReportPage` (las 3 hojas) y `SettingsPage` (cuentas, reglas, trabajadores).
+  filtrable y edición de categoría/comentario/nota), `PayrollPage` (nóminas por trabajador),
+  `ReportPage` (las 3 hojas) y `SettingsPage` (cuentas, categorías, reglas, trabajadores).
 - **Utilidades con tests** (`format`, `payroll`, `reportDetail`) concentran la lógica de presentación
   (formato CLP/fechas, agrupación de nóminas, agrupación por categoría del informe).
 - **`styles.css`** define el diseño; el informe usa `@media print` y `no-print` para que al imprimir
@@ -193,19 +198,21 @@ La integración entre las piezas se sostiene con varios mecanismos concretos:
    server (`buildReport`, consultas de `app.ts`). Ambos lados compilan con `strict`, y correr
    `npm run typecheck` detecta cuando el contrato se desalinea.
 3. **CSRF de punta a punta.** El cliente añade `x-requested-with: syncbanks` en cada escritura
-   (`api.ts:23`) y el server lo exige en `/api` (`app.ts:76`); si alguno de los dos cambia, los tests
-   de API lo delatan.
+   (`api.ts:23`) y el server lo exige en `/api` (`app.ts:76`). Los tests de API verifican que el
+   server rechace una escritura sin el header.
 4. **Verificación de datos en la carga.** Al importar se recalcula el saldo por movimiento y se
-   compara con el saldo que trae cada cartola (`checkBalances`). Un descuadre genera una advertencia,
-   que el informe también muestra. El **período real** del informe se deriva de los movimientos
-   cargados, no del filtro, para que pantalla y PDF coincidan.
+   compara con el saldo que trae cada cartola (`checkBalances`). Un descuadre genera una advertencia
+   en el resultado de la importación (pantalla *Importar cartolas*) y en `GET /api/integrity`. El
+   informe, aparte, avisa en pantalla (no en el PDF) cuando la cobertura de cartolas no alcanza el
+   período. El **período real** del informe se deriva de los movimientos cargados, no del filtro, para
+   que pantalla y PDF coincidan.
 5. **Reprocesamiento consistente.** Tras cualquier cambio (importar, editar, borrar regla) se llama a
    `recategorize`, que recalcula todo lo automático respetando lo manual. Esto mantiene coherentes
    movimientos, informe e integridad aun cuando una carga nueva cambie la clasificación de otra cuenta
    (por ejemplo, al confirmarse un traspaso interno).
 6. **Pruebas automatizadas como red.** El server se prueba con **Supertest** contra la app Express
    real y una base SQLCipher temporal (`server/test/helpers.ts` construye cartolas ficticias). La web
-   prueba sus utilidades con Vitest + jsdom. `npm test` y `npm run typecheck` son el candado antes de
+   prueba sus utilidades y la tarjeta de comentario del informe con Vitest + jsdom. `npm test` y `npm run typecheck` son el candado antes de
    dar por buena una tarea.
 7. **Persistencia idempotente.** El esquema y las migraciones permiten abrir bases de cualquier versión
    anterior sin recrearlas, de modo que evolucionar el formato no “desconecta” datos existentes.
@@ -227,7 +234,7 @@ Notas clave de diseño:
 - `movements.seq` = orden **dentro del día** (0 = el más reciente). Las fechas son `YYYY-MM-DD`
   (solo fecha contable, sin hora).
 - `movements.category_source` (`auto`/`rule`/`manual`) y `label_source` (`rule`/`manual`) registran
-  **por qué** un movimiento tiene esa categoría/etiqueta; lo `manual` es intocable por el recálculo.
+  **por qué** un movimiento tiene esa categoría/comentario; lo `manual` es intocable por el recálculo.
 - `movements.balance_after` y `credit_used_after` permiten reconstruir el saldo y el uso de la línea
   en cualquier momento; `provisional` marca lo que viene de una cartola en línea de BancoEstado.
 - `report_notes` guarda el comentario por `(scope, from_date, to_date)`: `scope` es `''` para todas las
@@ -246,13 +253,13 @@ Notas clave de diseño:
 
 ```bash
 npm run typecheck   # tsc --noEmit en server y web
-npm test            # Vitest: server (supertest) + web (utilidades)
+npm test            # Vitest: server (supertest) + web (utilidades y componentes)
 ```
 
 - **Server:** `parser`, `bancoestado`, `classify`, `creditLine`, `importer`, `report` y `api` (esta
   última ejercita login, CSRF, importación, edición, informe y comentario de punta a punta).
-- **Web:** `format`, `payroll` y `reportDetail`. (Cobertura de componentes/páginas es trabajo
-  pendiente; ver [AGENTS.md](AGENTS.md).)
+- **Web:** `format`, `payroll`, `reportDetail`, `theme` y `ReportPage` (tarjeta de comentario). Falta
+  cobertura del resto de las páginas; ver [AGENTS.md](AGENTS.md).
 
 ## 10. Despliegue y operación
 
