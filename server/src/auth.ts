@@ -29,6 +29,22 @@ export function createUser(db: DB, username: string, password: string) {
   db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)').run(username.trim().toLowerCase(), hashPassword(password));
 }
 
+/**
+ * Pone una contraseña nueva a un usuario existente (la anterior no se puede recuperar: solo se guarda
+ * su hash). Cierra sus sesiones abiertas, para que quien tuviera la clave vieja quede fuera.
+ */
+export function setPassword(db: DB, username: string, password: string) {
+  if (password.length < 10) throw new Error('La contraseña debe tener al menos 10 caracteres');
+  const user = db.prepare('SELECT id FROM users WHERE username = ?').get(username.trim().toLowerCase()) as { id: number } | undefined;
+  if (!user) throw new Error(`No existe el usuario "${username}"`);
+  db.transaction(() => {
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(password), user.id);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+  })();
+}
+
+export const listUsers = (db: DB) => (db.prepare('SELECT username FROM users ORDER BY username').all() as Array<{ username: string }>).map((u) => u.username);
+
 const sha256 = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
 
 export function createSession(db: DB, userId: number, days: number): { token: string; expires: Date } {

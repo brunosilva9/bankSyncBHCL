@@ -32,6 +32,7 @@ Desde la raíz del repo:
 | `npm run import -- a.txt b.xlsx` | Importa cartolas desde la consola |
 | `npm run backup` | Respaldo cifrado de la base en `backups/` |
 | `npm run user:add -- <usuario>` | Crea un usuario (pide contraseña, mínimo 10 caracteres) |
+| `npm run user:password -- <usuario>` | Contraseña nueva para un usuario (sin usuario, lista los existentes) |
 
 Antes de dar una tarea por terminada: `npm run typecheck` y `npm test` deben pasar.
 
@@ -112,6 +113,11 @@ web/src/
 
 ### Hecho
 
+- **Giros de la línea duplicados por cambio de redacción.** Banco de Chile informa el giro automático
+      como `Trasp.fondos A Ctacte-l.cred-c.vista` y en la cartola siguiente el mismo giro como
+      `Transferencia Desde Linea De Credito`. El importador los compara como uno solo (`SAME_MOVEMENT` en
+      `server/src/domain/importer.ts`) y deja la redacción más reciente. Si aparece otro renombre del banco,
+      se agrega ahí. Test en `server/test/importer.test.ts`.
 - **Separar nóminas a mano.** `movements.payroll_split_after` marca el último pago de una nómina;
       `recomputePayrollBatches` abre una nómina nueva en ese pago (recorre de abajo hacia arriba).
       `POST /api/movements/:id/payroll-split` y botones *Cortar aquí* / *Unir con la de abajo* en

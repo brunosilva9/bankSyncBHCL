@@ -70,6 +70,24 @@ describe('importCartola', () => {
     expect(r.warnings[0]).toMatch(/cartola\.txt/);
   });
 
+  it('no duplica el giro de la línea cuando el banco le cambia la redacción en la cartola siguiente', () => {
+    // El día del giro sale como "Trasp.fondos..."; en la cartola siguiente, el mismo giro como "Transferencia Desde...".
+    load(db, cartola(ACC_A, '2026-10-19', 430, [{ date: '2026-10-19', amount: 430, type: 'A', desc: 'Trasp.fondos A Ctacte-l.cred-c.vista' }]));
+    const r = load(
+      db,
+      cartola(ACC_A, '2026-10-21', 330, [
+        { date: '2026-10-21', amount: 100, type: 'C', desc: 'Pago: Botilleria El Sol' },
+        { date: '2026-10-19', amount: 430, type: 'A', desc: 'Transferencia Desde Linea De Credito' },
+      ]),
+      'siguiente.txt',
+    );
+    expect(r.inserted).toBe(1);
+    expect(r.warnings).toEqual([]);
+    expect(db.prepare("SELECT description, kind FROM movements WHERE date = '2026-10-19'").all()).toEqual([
+      { description: 'Transferencia Desde Linea De Credito', kind: 'credit_line' },
+    ]);
+  });
+
   it('asigna categorías automáticas por tipo de movimiento', () => {
     load(db, cartola(ACC_A, '2026-10-02', 0, [{ date: '2026-10-02', amount: 50, type: 'C', desc: 'Pago Fácil Bch: 0111111111' }]));
     const row = db.prepare('SELECT m.counterparty, c.name FROM movements m JOIN categories c ON c.id = m.category_id').get();

@@ -35,8 +35,15 @@ interface StoredMovement {
   counterparty_rut: string | null;
 }
 
+// Redacciones distintas que el banco usa para el mismo movimiento. Banco de Chile informa el giro
+// automático de la línea el mismo día como "Trasp.fondos A Ctacte-l.cred-c.vista" y, en las cartolas
+// siguientes, ese mismo giro (misma fecha y monto) como "Transferencia Desde Linea De Credito". Si no se
+// tratan como uno solo, el giro se carga dos veces: descuadra el saldo y el uso de la línea.
+const SAME_MOVEMENT: Array<[RegExp, string]> = [[/^(trasp\.fondos a ctacte-l\.cred|transferencia desde linea de credito)/i, 'giro de línea de crédito']];
+const matchingDescription = (d: string) => SAME_MOVEMENT.find(([re]) => re.test(d))?.[1] ?? d;
+
 const keyOf = (m: { amount: number; direction: string; description: string; doc_number?: string | null; docNumber?: string | null }) =>
-  `${m.direction}|${m.amount}|${m.description}|${m.doc_number ?? m.docNumber ?? ''}`;
+  `${m.direction}|${m.amount}|${matchingDescription(m.description)}|${m.doc_number ?? m.docNumber ?? ''}`;
 
 function groupByDate(movements: ParsedMovement[]): Map<string, ParsedMovement[]> {
   const days = new Map<string, ParsedMovement[]>();
@@ -117,6 +124,7 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
     // La clasificación (tipo y contraparte) es derivada de la descripción: al reimportar se refresca,
     // así una mejora del clasificador también arregla movimientos ya cargados.
     const setClassification = db.prepare('UPDATE movements SET kind = ?, counterparty = ?, counterparty_rut = ? WHERE id = ?');
+    const setDescription = db.prepare('UPDATE movements SET description = ? WHERE id = ?');
     const latestCoveringImport = db.prepare(
       "SELECT MAX(balance_date) AS d FROM imports WHERE account_id = ? AND id != ? AND kind = 'account' AND from_date <= ? AND to_date >= ?",
     );
@@ -153,6 +161,8 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
           matchedIds.add(match.id);
           if (fileIsAuthority) setSeq.run(i, match.id);
           if (m.balance !== undefined) setBalance.run(m.balance, match.id);
+          // Mismo movimiento con otra redacción (ver SAME_MOVEMENT): queda la de la descarga más reciente.
+          if (m.description !== match.description && fromBottom) setDescription.run(m.description, match.id);
           const c = classifyDescription(m.description);
           if (c.kind !== match.kind || c.counterparty !== match.counterparty || (c.counterpartyRut ?? null) !== match.counterparty_rut) {
             setClassification.run(c.kind, c.counterparty, c.counterpartyRut ?? null, match.id);

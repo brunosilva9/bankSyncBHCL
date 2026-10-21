@@ -288,3 +288,4 @@ En producción debe ir detrás de HTTPS (el proxy reverso termina TLS). El respa
 | `npm run import -- a.txt b.xlsx` | Importa cartolas desde la consola |
 | `npm run backup` | Respaldo cifrado en `backups/` |
 | `npm run user:add -- <usuario>` | Crea un usuario |
+| `npm run user:password -- <usuario>` | Contraseña nueva (sin usuario, lista los existentes) |

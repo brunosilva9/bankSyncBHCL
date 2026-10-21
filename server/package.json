@@ -7,6 +7,7 @@
     "dev": "tsx watch --env-file-if-exists=../.env src/index.ts",
     "start": "tsx --env-file-if-exists=../.env src/index.ts",
     "user:add": "tsx --env-file-if-exists=../.env src/cli/addUser.ts",
+    "user:password": "tsx --env-file-if-exists=../.env src/cli/setPassword.ts",
     "import": "tsx --env-file-if-exists=../.env src/cli/importFiles.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

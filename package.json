@@ -10,6 +10,7 @@
     "test": "npm --prefix server test && npm --prefix web test",
     "typecheck": "npm --prefix server run typecheck && npx --prefix web tsc --noEmit -p web",
     "user:add": "npm --prefix server run user:add --",
+    "user:password": "npm --prefix server run user:password --",
     "import": "npm --prefix server run import --",
     "backup": "npm --prefix server run backup --"
   },

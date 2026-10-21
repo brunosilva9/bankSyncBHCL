@@ -12,6 +12,7 @@ Vista global de los movimientos de las cuentas de Banco de Chile: importa las ca
 npm run setup                       # instala dependencias de la raíz, server y web
 cp .env.example .env                # y completar DB_KEY (ver abajo)
 npm run user:add -- <usuario>       # pide la contraseña (mínimo 10 caracteres)
+npm run user:password -- <usuario>  # contraseña nueva si se olvidó (sin usuario, lista los que hay)
 npm run dev                         # API en :3001, web en http://localhost:5173
 ```
 
