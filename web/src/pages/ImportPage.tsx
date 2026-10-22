@@ -48,6 +48,8 @@ export function ImportPage() {
         <strong>Banco de Chile:</strong> cartola en formato <strong>.txt</strong>. <strong>BancoEstado:</strong> cartola histórica (consolidada)
         o cartola en línea, en <strong>Excel (.xlsx)</strong>. Puedes subir varias a la vez y repetir cartolas que se traslapan: los movimientos
         que ya estaban no se duplican. La cuenta se reconoce automáticamente desde el archivo.
+        Las cartolas de cuentas de persona, tarjetas de crédito y Banco Falabella ya se reconocen (la app te dice qué son), pero todavía no se
+        importan.
       </p>
 
       <label
@@ -59,8 +61,8 @@ export function ImportPage() {
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
       >
-        <input type="file" accept=".txt,.xlsx,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" multiple hidden onChange={(e) => e.target.files && upload(e.target.files)} disabled={busy} />
-        {busy ? 'Importando…' : 'Arrastra las cartolas (.txt o .xlsx) aquí o haz clic para elegirlas'}
+        <input type="file" accept=".txt,.xlsx,.xls,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" multiple hidden onChange={(e) => e.target.files && upload(e.target.files)} disabled={busy} />
+        {busy ? 'Importando…' : 'Arrastra las cartolas (.txt, .xlsx o .xls) aquí o haz clic para elegirlas'}
       </label>
 
       {results.map((r) => (

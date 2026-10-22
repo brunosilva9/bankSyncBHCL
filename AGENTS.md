@@ -33,8 +33,12 @@ Desde la raíz del repo:
 | `npm run backup` | Respaldo cifrado de la base en `backups/` |
 | `npm run user:add -- <usuario>` | Crea un usuario (pide contraseña, mínimo 10 caracteres) |
 | `npm run user:password -- <usuario>` | Contraseña nueva para un usuario (sin usuario, lista los existentes) |
+| `npm run detect -- <archivos o carpetas>` | Qué reconoce la app en cada archivo, sin importar |
+| `npm run check:real -- guardar\|comparar <carpetas>` | Red de seguridad con cartolas reales (foto en `data/`, fuera de git) |
 
-Antes de dar una tarea por terminada: `npm run typecheck` y `npm test` deben pasar.
+Antes de dar una tarea por terminada: `npm run typecheck` y `npm test` deben pasar. Si se tocan los
+lectores de cartolas (`server/src/parser/`), además `npm run check:real -- comparar <carpetas>`: los
+archivos reales que ya se leían deben dar exactamente lo mismo.
 
 ## Estructura
 
@@ -100,6 +104,11 @@ web/src/
 
 ### Pendiente
 
+- [ ] **Importar los formatos que ya se reconocen** (`server/src/parser/detect.ts`, `supported: false`).
+      Cuentas corrientes y líneas primero (calzan con el modelo actual); las tarjetas necesitan modelo
+      propio (facturado vs. por facturar, cuotas, deuda). Para los archivos sin número de cuenta
+      (Banco Falabella): asignar sola si el usuario tiene una sola cuenta de ese banco y producto, o
+      por traslape de movimientos con lo ya cargado, o preguntar una vez y recordarlo.
 - [ ] **Verificar la consolidación de la cartola de BancoEstado (N° 041).** Confirmar con la cartola
       041 real cómo cambian los movimientos al consolidarse (descripción, N° de operación, fecha). Hoy
       se reemplazan por período y las ediciones manuales se traspasan por día, sentido y monto. Ojo
@@ -113,6 +122,10 @@ web/src/
 
 ### Hecho
 
+- **Detección de banco y producto por contenido** (`server/src/parser/detect.ts`, `npm run detect`).
+      Firmas para Banco de Chile, BancoEstado (empresa/persona: cuenta, línea, tarjeta) y Banco Falabella
+      (cuenta, línea, CMR). Lo que ya se importaba sigue por el mismo camino. `.xls` con SheetJS 0.20.3.
+      Red de seguridad con archivos reales: `npm run check:real`.
 - **Giros de la línea duplicados por cambio de redacción.** Banco de Chile informa el giro automático
       como `Trasp.fondos A Ctacte-l.cred-c.vista` y en la cartola siguiente el mismo giro como
       `Transferencia Desde Linea De Credito`. El importador los compara como uno solo (`SAME_MOVEMENT` en

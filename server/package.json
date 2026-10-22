@@ -8,6 +8,8 @@
     "start": "tsx --env-file-if-exists=../.env src/index.ts",
     "user:add": "tsx --env-file-if-exists=../.env src/cli/addUser.ts",
     "user:password": "tsx --env-file-if-exists=../.env src/cli/setPassword.ts",
+    "detect": "tsx src/cli/detect.ts",
+    "check:real": "tsx --env-file-if-exists=../.env src/cli/realFilesCheck.ts",
     "import": "tsx --env-file-if-exists=../.env src/cli/importFiles.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -18,7 +20,8 @@
     "exceljs": "^4.4.0",
     "express": "^5.3.0",
     "helmet": "^8.3.0",
-    "tsx": "^4.23.15"
+    "tsx": "^4.23.15",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

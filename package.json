@@ -11,6 +11,8 @@
     "typecheck": "npm --prefix server run typecheck && npx --prefix web tsc --noEmit -p web",
     "user:add": "npm --prefix server run user:add --",
     "user:password": "npm --prefix server run user:password --",
+    "detect": "npm --prefix server run detect --",
+    "check:real": "npm --prefix server run check:real --",
     "import": "npm --prefix server run import --",
     "backup": "npm --prefix server run backup --"
   },

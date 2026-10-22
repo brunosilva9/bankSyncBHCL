@@ -33,6 +33,8 @@ Otros comandos:
 | `npm start` | Levanta el server, que también sirve `web/dist` |
 | `npm run import -- a.txt b.xlsx` | Importa cartolas desde la consola |
 | `npm run backup` | Respaldo completo y cifrado de la base en `backups/` |
+| `npm run detect -- <archivos o carpetas>` | Dice qué es cada archivo (banco, producto, cuenta) sin importar nada |
+| `npm run check:real -- guardar\|comparar <carpetas>` | Red de seguridad con cartolas reales al cambiar los lectores (ver abajo) |
 
 ## Cómo funciona
 
@@ -93,6 +95,16 @@ Las transferencias de BancoEstado traen el RUT de la contraparte («Transferenci
 
 Un traspaso con pareja confirmada siempre se marca como interno, aunque antes se haya categorizado a mano (por ejemplo, cuando la otra cuenta aún no se cargaba). Si no fuera así, se contaría dos veces. El comentario se conserva.
 
+### Otros bancos y productos
+
+La app reconoce qué es cada archivo por su **contenido**, no por el nombre: banco, producto (cuenta corriente, línea de crédito, tarjeta de crédito) y, si el archivo lo trae, el número de cuenta o los últimos dígitos de la tarjeta. Hoy se reconocen, pero **todavía no se importan**:
+
+- **BancoEstado persona:** cartola histórica y últimos movimientos de cuenta corriente (traen el número de cuenta), línea de crédito (trae su número y la cuenta asociada) y movimientos por facturar de tarjeta (trae los últimos 4 dígitos).
+- **Banco Falabella:** `.xls` de cuenta corriente y de línea de crédito, y tarjeta CMR facturada y no facturada. **No traen número de cuenta.**
+- **Banco de Chile:** el `.xls` antiguo (se recomienda el `.txt`).
+
+Al subir uno de estos archivos, la app responde qué reconoció. Las cartolas en PDF y los `.txt` de otros bancos sin datos de la cuenta no se reconocen.
+
 ### Fechas
 
 El `.txt` y el `.xls` traen solo la fecha contable, sin hora. Lo que se hace después del horario de corte del banco, en fin de semana o feriado aparece con fecha del día hábil siguiente. El orden dentro de un mismo día sí es el real. Por eso los atajos de fecha del informe incluyen 7 días hacia adelante.
@@ -103,6 +115,17 @@ El `.txt` y el `.xls` traen solo la fecha contable, sin hora. Lo que se hace des
 - Login con contraseña (scrypt), sesión en cookie `HttpOnly` + `SameSite=Strict` (+ `Secure` en producción), con un límite de intentos fallidos.
 - Toda escritura exige el header `x-requested-with: syncbanks`, como protección CSRF.
 - Las cartolas (`*.txt`, `*.xls`), la base (`data/`) y el `.env` están en `.gitignore`. **Nunca se suben datos reales al repositorio**: los tests usan datos ficticios.
+
+## Cambiar los lectores sin romper lo que funciona
+
+Además de los tests (con datos ficticios), hay una comprobación con **cartolas reales** que nunca sale del computador:
+
+```bash
+npm run check:real -- guardar  C:/ruta/descargas C:/otra/carpeta   # antes de tocar los lectores
+npm run check:real -- comparar C:/ruta/descargas C:/otra/carpeta   # después
+```
+
+`guardar` pasa cada archivo por el lector actual y guarda un resumen en `data/` (fuera de git). `comparar` avisa si algún archivo que ya se leía cambió en algo: cuenta, saldo, fechas o movimientos.
 
 ## Respaldo y traspaso al servidor
 

@@ -25,7 +25,8 @@ un único archivo **SQLite cifrado**.
 | Backend | Express | ^5.3.0 | Rutas HTTP de la API y servido del frontend |
 | Base de datos | `better-sqlite3-multiple-ciphers` | ^13.0.3 | SQLite **cifrado** (SQLCipher/AES-256), sin servidor |
 | Seguridad HTTP | Helmet | ^8.3.0 | Cabeceras HTTP seguras |
-| Excel | ExcelJS | ^4.4.0 | Lee las cartolas `.xlsx` de BancoEstado |
+| Excel | ExcelJS | ^4.4.0 | Lee las cartolas `.xlsx` |
+| Excel antiguo | SheetJS (`xlsx`) | 0.20.3 (CDN oficial) | Lee los `.xls` (BIFF). No se usa la 0.18.5 de npm, que tiene vulnerabilidades conocidas |
 | Ejecución TS | `tsx` | ^4.23.15 | Corre TypeScript directo (dev y producción) |
 | Frontend | React | ^19.3.0 | UI de una sola página (SPA) |
 | Build frontend | Vite | ^8.3.4 | Dev server con proxy y build de producción |
@@ -158,9 +159,12 @@ calcula en `buildReport`.
 - **`bancoestado.ts`** — `.xlsx` de BancoEstado con dos formatos: *Cartola Histórica* (consolidada,
   numerada) y *Cartola en Línea* (provisoria). Ubica las columnas por el encabezado, reconoce hojas
   `Resumen` + `Movimientos`/`Registros`, y **cada fila trae su saldo**.
-- **`index.ts`** — `parseStatementFile` reconoce el formato por el **contenido** (los `.xlsx` son ZIP,
-  empiezan con `PK`), no por el nombre del archivo. El `.xls` antiguo de Banco de Chile se rechaza con
-  un mensaje que pide el `.txt`.
+- **`detect.ts`** — `detectStatement` reconoce banco, producto y variante de un archivo por su
+  **contenido** (título, columnas, nombre de hoja), con una "firma" por formato, y devuelve el número
+  de cuenta o tarjeta si viene, la evidencia y si ya se puede importar. Cubre Banco de Chile, BancoEstado
+  (empresa y persona, cuenta, línea y tarjeta) y Banco Falabella (cuenta, línea y CMR).
+- **`index.ts`** — `parseStatementFile`: lo que ya se importaba (Banco de Chile `.txt`, BancoEstado
+  empresa) sigue por su lector; los formatos reconocidos que aún no se importan responden qué son.
 
 ### 4.7 CLI (`server/src/cli/`)
 
