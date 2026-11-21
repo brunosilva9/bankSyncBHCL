@@ -42,6 +42,8 @@ export interface ParsedCartola {
   accountNumber: string;
   /** Fecha de las líneas de saldo (día en que se descargó la cartola). */
   balanceDate: string;
+  /** Hora de Chile de la descarga, "YYYY-MM-DD HH:MM", si el archivo la trae (BancoEstado). */
+  downloadedAt?: string;
   /** Saldo contable al momento de la descarga; incluye todos los movimientos del archivo. */
   balance: number;
   movements: ParsedMovement[];

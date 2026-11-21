@@ -3,14 +3,14 @@
 import readline from 'node:readline/promises';
 import { listUsers, setPassword } from '../auth.js';
 import { config } from '../config.js';
-import { openDb } from '../db.js';
+import { openStore } from '../store.js';
 
-const db = openDb(config.dbPath, config.dbKey);
+const db = openStore(config.dbPath, config.dbKey).auth;
 const username = process.argv[2];
 if (!username) {
   const users = listUsers(db);
   console.log('Uso: npm run user:password -- <usuario>');
-  console.log(users.length ? `Usuarios: ${users.join(', ')}` : 'No hay usuarios. Crea uno con: npm run user:add -- <usuario>');
+  console.log(users.length ? `Usuarios: ${users.map((u) => `${u.username} (${u.role})`).join(', ')}` : 'No hay usuarios. Crea uno con: npm run user:add -- <usuario>');
   process.exit(0);
 }
 

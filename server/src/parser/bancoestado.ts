@@ -8,6 +8,7 @@
 
 import ExcelJS from 'exceljs';
 import { formatRut } from '../domain/classify.js';
+import { chileDay } from '../time.js';
 import { CartolaParseError, type ParsedCartola, type ParsedMovement } from './cartola.js';
 
 type Cell = ExcelJS.CellValue;
@@ -46,6 +47,12 @@ function isoDate(text: string): string | null {
   return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
 }
 
+/** "11/10/2026-14:59" -> "2026-10-11 14:59" (hora de Chile). */
+function isoDateTime(text: string): string | null {
+  const m = text.match(/(\d{2})\/(\d{2})\/(\d{4})\s*-?\s*(\d{1,2}):(\d{2})/);
+  return m ? `${m[3]}-${m[2]}-${m[1]} ${m[4].padStart(2, '0')}:${m[5]}` : null;
+}
+
 const normalizeLabel = (s: string) =>
   s
     .normalize('NFD')
@@ -74,12 +81,15 @@ export async function parseBancoEstadoXlsx(bytes: Uint8Array): Promise<ParsedCar
 
   // Resumen: pares "etiqueta, valor" (y una línea suelta "Fecha - Hora dd/mm/aaaa-hh:mm").
   const fields = new Map<string, string>();
-  let downloadedAt: string | null = null;
+  const download: { day: string | null; at: string | null } = { day: null, at: null };
   let isBancoEstado = false;
   summary.eachRow((row) => {
     const texts = rowTexts(row);
     if (texts.some((t) => /bancoestado/i.test(t))) isBancoEstado = true;
-    if (texts.length === 1 && /fecha\s*-\s*hora/i.test(texts[0])) downloadedAt = isoDate(texts[0]);
+    if (texts.length === 1 && /fecha\s*-\s*hora/i.test(texts[0])) {
+      download.day = isoDate(texts[0]);
+      download.at = isoDateTime(texts[0]);
+    }
     for (let i = 0; i + 1 < texts.length; i += 2) fields.set(normalizeLabel(texts[i]), texts[i + 1]);
   });
   if (!isBancoEstado) throw new CartolaParseError('El Excel no es una cartola de BancoEstado');
@@ -138,7 +148,8 @@ export async function parseBancoEstadoXlsx(bytes: Uint8Array): Promise<ParsedCar
     bank: 'BancoEstado',
     accountNumber,
     balance,
-    balanceDate: downloadedAt ?? dates[dates.length - 1] ?? new Date().toISOString().slice(0, 10),
+    balanceDate: download.day ?? dates[dates.length - 1] ?? chileDay(),
+    ...(download.at ? { downloadedAt: download.at } : {}),
     movements,
     fromDate: dates[0] ?? null,
     toDate: dates[dates.length - 1] ?? null,

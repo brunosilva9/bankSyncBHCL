@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
-import { api, qs, type Movement } from '../api';
+import { api, fechaParam, qs, type Movement } from '../api';
 import { CategorySelect } from '../components/CategorySelect';
+import { DatesSelect } from '../components/DatesSelect';
+import { MovedBadge } from '../components/MovedBadge';
 import { LabelInput } from '../components/LabelInput';
 import { RangePicker } from '../components/RangePicker';
 import { useFetch, useShared } from '../data';
@@ -11,16 +13,16 @@ import { navigate } from '../router';
 type View = 'nominas' | 'trabajadores';
 
 export function PayrollPage({ params }: { params: Record<string, string> }) {
-  const { accounts, reload: reloadShared } = useShared();
+  const { accounts, reload: reloadShared, dates } = useShared();
   const range: DateRange = params.from && params.to ? { from: params.from, to: params.to } : presetRange('month');
   const accountId = params.accountId ?? '';
   const view: View = params.view === 'trabajadores' ? 'trabajadores' : 'nominas';
   const setFilter = (patch: Record<string, string | undefined>) => navigate('/nominas', { ...range, accountId, view, ...patch }, true);
 
   const { data, error, loading, refresh, setData } = useFetch<Movement[]>(
-    `/api/movements${qs({ ...range, accountId, kind: 'payroll', limit: 5000 })}`,
+    `/api/movements${qs({ ...range, accountId, kind: 'payroll', limit: 5000, fecha: fechaParam(dates) })}`,
   );
-  const batches = useMemo(() => buildBatches(data ?? []), [data]);
+  const batches = useMemo(() => buildBatches(data ?? [], dates), [data, dates]);
   const workers = useMemo(() => summarizeWorkers(batches), [batches]);
   const total = batches.reduce((s, b) => s + b.total, 0);
   const payments = batches.reduce((s, b) => s + b.items.length, 0);
@@ -47,6 +49,7 @@ export function PayrollPage({ params }: { params: Record<string, string> }) {
     <div className="page">
       <div className="toolbar">
         <RangePicker value={range} onChange={(r) => setFilter({ ...r })} />
+        <DatesSelect />
         <select value={accountId} onChange={(e) => setFilter({ accountId: e.target.value || undefined })}>
           <option value="">Todas las cuentas</option>
           {accounts.map((a) => (
@@ -129,7 +132,10 @@ function BatchesTable(props: {
             const isOpen = open.has(b.items[0].id);
             return [
               <tr key={b.key} className="batch">
-                <td className="nowrap">{shortDate(b.date, true)}</td>
+                <td className="nowrap">
+                  {shortDate(b.date, true)}
+                  <MovedBadge items={b.items} />
+                </td>
                 <td className="nowrap small">{b.accountName}</td>
                 <td>
                   <button className="link" onClick={() => toggle(b.items[0].id)}>

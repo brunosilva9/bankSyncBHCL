@@ -1,8 +1,18 @@
 import type { DB } from '../db.js';
 import { displayAccountNumber, type ParsedCartola, type ParsedMovement } from '../parser/cartola.js';
+import { dayDiff } from '../parser/creditCard.js';
 import { classifyDescription, titleCase } from './classify.js';
 import { recategorize } from './categorize.js';
 import { recomputeCreditLine } from './creditLine.js';
+import { observedOf, realDateOf, seenStatements } from './seen.js';
+
+/** Para saber la hora de la descarga cuando el archivo no la trae (ver observedOf en seen.ts). */
+export interface SeenOptions {
+  /** Última modificación del archivo (ms): en uno recién bajado, la hora de la descarga. */
+  fileModified?: number | null;
+  /** Ahora (ms); se puede fijar en los tests. */
+  now?: number;
+}
 
 export interface ImportResult {
   type: 'account';
@@ -60,7 +70,8 @@ function groupByDate(movements: ParsedMovement[]): Map<string, ParsedMovement[]>
  * mismo monto el mismo día). Por eso se compara día por día como multiconjunto: en cada día se
  * agregan solo los movimientos que exceden lo que ya estaba cargado.
  */
-export function importCartola(db: DB, parsed: ParsedCartola, filename: string, userId: number | null): ImportResult {
+export function importCartola(db: DB, parsed: ParsedCartola, filename: string, userId: number | null, seen: SeenOptions = {}): ImportResult {
+  const observed = observedOf(parsed.balanceDate, parsed.downloadedAt ?? null, seen.fileModified ?? null, seen.now ?? Date.now());
   return db.transaction(() => {
     let account = db.prepare('SELECT id, name FROM accounts WHERE number = ?').get(parsed.accountNumber) as { id: number; name: string } | undefined;
     if (!account) {
@@ -77,8 +88,8 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
     // BancoEstado: la cartola en línea es provisoria. Una nueva cartola en línea reemplaza a la anterior
     // completa, y una consolidada reemplaza lo provisorio de su período.
     // TODO: verificar con la cartola 41 real cómo cambian los movimientos al consolidarse (descripción,
-    // N° de operación, fecha). Por ahora se reemplazan por período y las ediciones manuales se traspasan
-    // al movimiento consolidado del mismo día, sentido y monto.
+    // N° de operación, fecha). Por ahora se reemplazan por período, y cuándo se vio cada uno y sus ediciones
+    // manuales pasan al movimiento que lo reemplaza (ver carryOver).
     const stash = parsed.statement
       ? removeProvisional(
           db,
@@ -87,15 +98,15 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
             ? { from: parsed.statement.fromDate ?? parsed.fromDate, to: parsed.statement.toDate ?? parsed.toDate }
             : null,
         )
-      : Object.assign([] as Annotation[], { removed: 0 });
+      : [];
     const provisional = parsed.statement?.kind === 'provisional' ? 1 : 0;
 
     const importId = Number(
       db
         .prepare(
           `INSERT INTO imports (account_id, filename, balance_date, balance, from_date, to_date, movements_in_file, inserted, user_id,
-                                statement_kind, statement_number)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+                                statement_kind, statement_number, observed_at, observed_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
         )
         .run(
           account.id,
@@ -108,6 +119,8 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
           userId,
           parsed.statement?.kind ?? null,
           parsed.statement?.number ?? null,
+          observed.at,
+          observed.source,
         ).lastInsertRowid,
     );
 
@@ -116,9 +129,10 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
     );
     const insert = db.prepare(
       `INSERT INTO movements (account_id, date, seq, amount, direction, description, doc_number, kind, counterparty, counterparty_rut,
-                              balance_after, provisional, import_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                              balance_after, provisional, import_id, first_seen_day, first_seen_at, real_date, real_date_source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
+    const seenAgain = seenStatements(db);
     const setSeq = db.prepare('UPDATE movements SET seq = ? WHERE id = ?');
     const setBalance = db.prepare('UPDATE movements SET balance_after = ? WHERE id = ?');
     // La clasificación (tipo y contraparte) es derivada de la descripción: al reimportar se refresca,
@@ -131,6 +145,7 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
 
     let inserted = 0;
     let anchorId: number | null = null;
+    const fresh: Fresh[] = [];
 
     for (const [date, incoming] of groupByDate(parsed.movements)) {
       const existing = selectDay.all(account.id, date) as StoredMovement[];
@@ -167,6 +182,7 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
           if (c.kind !== match.kind || c.counterparty !== match.counterparty || (c.counterpartyRut ?? null) !== match.counterparty_rut) {
             setClassification.run(c.kind, c.counterparty, c.counterpartyRut ?? null, match.id);
           }
+          seenAgain.seen(match.id, observed.day, observed.at);
           if (m.position === 0) anchorId = match.id;
         } else {
           toInsert.push({ m, seq: fileIsAuthority ? i : existing.length + toInsert.length });
@@ -180,6 +196,7 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
 
       for (const { m, seq } of toInsert) {
         const c = classifyDescription(m.description);
+        const real = realDateOf(date, observed.day);
         const id = Number(
           insert.run(
             account.id,
@@ -195,8 +212,13 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
             m.balance ?? null,
             provisional,
             importId,
+            observed.day,
+            observed.at,
+            real.day,
+            real.source,
           ).lastInsertRowid,
         );
+        fresh.push({ id, date, direction: m.direction, amount: m.amount, balance: m.balance ?? null, seq });
         if (m.position === 0) anchorId = id;
         inserted++;
       }
@@ -204,7 +226,7 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
 
     db.prepare('UPDATE imports SET inserted = ?, anchor_movement_id = ? WHERE id = ?').run(inserted, anchorId, importId);
     if (parsed.statement) provisionalFirst(db, account.id);
-    restoreAnnotations(db, account.id, stash);
+    carryOver(db, stash, fresh);
 
     recategorize(db);
     const warnings = recomputeBalances(db, account.id);
@@ -225,16 +247,22 @@ export function importCartola(db: DB, parsed: ParsedCartola, filename: string, u
       balance: parsed.balance,
       bank: parsed.bank,
       statement: parsed.statement ? { kind: parsed.statement.kind, number: parsed.statement.number } : null,
-      replacedProvisional: stash.removed,
+      replacedProvisional: stash.length,
       warnings,
     };
   })();
 }
 
-type Annotation = {
+/** Movimiento provisorio que una cartola nueva reemplazó: lo que hay que pasarle al que lo reemplaza. */
+type Replaced = {
   date: string;
   direction: 'C' | 'A';
   amount: number;
+  balance_after: number | null;
+  first_seen_day: string | null;
+  first_seen_at: string | null;
+  real_date: string | null;
+  real_date_source: string | null;
   category_id: number | null;
   category_source: string | null;
   label: string | null;
@@ -242,35 +270,66 @@ type Annotation = {
   note: string | null;
 };
 
-/** Borra movimientos provisorios (todos, o los de un período) guardando sus ediciones manuales. */
-function removeProvisional(db: DB, accountId: number, range: { from: string | null; to: string | null } | null) {
+/** Movimiento que esta carga agregó. */
+type Fresh = { id: number; date: string; direction: 'C' | 'A'; amount: number; balance: number | null; seq: number };
+
+/** Borra movimientos provisorios (todos, o los de un período) y devuelve lo que traían. */
+function removeProvisional(db: DB, accountId: number, range: { from: string | null; to: string | null } | null): Replaced[] {
   const where = range ? 'AND date >= ? AND date <= ?' : '';
   const args = range ? [accountId, range.from ?? '0000-00-00', range.to ?? '9999-99-99'] : [accountId];
-  const annotated = db
+  const replaced = db
     .prepare(
-      `SELECT date, direction, amount, category_id, category_source, label, label_source, note FROM movements
-       WHERE account_id = ? AND provisional = 1 ${where}
-         AND (category_source = 'manual' OR label_source = 'manual' OR note IS NOT NULL)`,
+      `SELECT date, direction, amount, balance_after, first_seen_day, first_seen_at, real_date, real_date_source,
+              category_id, category_source, label, label_source, note
+       FROM movements WHERE account_id = ? AND provisional = 1 ${where}`,
     )
-    .all(...args) as Annotation[];
-  const removed = db.prepare(`DELETE FROM movements WHERE account_id = ? AND provisional = 1 ${where}`).run(...args).changes;
-  return Object.assign(annotated, { removed });
+    .all(...args) as Replaced[];
+  db.prepare(`DELETE FROM movements WHERE account_id = ? AND provisional = 1 ${where}`).run(...args);
+  return replaced;
 }
 
-/** Traspasa las ediciones manuales al movimiento nuevo del mismo día, sentido y monto. */
-function restoreAnnotations(db: DB, accountId: number, stash: Annotation[]) {
-  const find = db.prepare(
-    `SELECT id FROM movements
-     WHERE account_id = ? AND date = ? AND direction = ? AND amount = ?
-       AND category_source IS NOT 'manual' AND label_source IS NOT 'manual' AND note IS NULL
-     ORDER BY seq LIMIT 1`,
-  );
-  for (const a of stash) {
-    const target = find.get(accountId, a.date, a.direction, a.amount) as { id: number } | undefined;
-    if (!target) continue;
-    if (a.category_source === 'manual') db.prepare("UPDATE movements SET category_id = ?, category_source = 'manual' WHERE id = ?").run(a.category_id, target.id);
-    if (a.label_source === 'manual') db.prepare("UPDATE movements SET label = ?, label_source = 'manual' WHERE id = ?").run(a.label, target.id);
-    if (a.note) db.prepare('UPDATE movements SET note = ? WHERE id = ?').run(a.note, target.id);
+/**
+ * Lo provisorio reemplazado le pasa al movimiento que lo reemplaza cuándo se vio por primera vez y las ediciones
+ * manuales. Al consolidarlo, el banco puede cambiarle la redacción, el N° de operación y hasta la fecha, así que se
+ * busca por pasadas, de la más segura a la más floja: mismo sentido, monto y saldo después (BancoEstado da el
+ * saldo de cada fila, que casi no se repite); mismo día, sentido y monto; y mismo sentido y monto a ±3 días, solo
+ * si hay un único candidato.
+ */
+function carryOver(db: DB, stash: Replaced[], fresh: Fresh[]) {
+  const used = new Set<number>();
+  const free = (s: Replaced) => fresh.filter((f) => !used.has(f.id) && f.direction === s.direction && f.amount === s.amount);
+  const passes: Array<(s: Replaced) => Fresh | undefined> = [
+    (s) => (s.balance_after === null ? undefined : free(s).filter((f) => f.balance === s.balance_after).sort((a, b) => dayDiff(a.date, s.date) - dayDiff(b.date, s.date))[0]),
+    (s) => free(s).filter((f) => f.date === s.date).sort((a, b) => a.seq - b.seq)[0],
+    (s) => {
+      const near = free(s).filter((f) => dayDiff(f.date, s.date) <= 3);
+      return near.length === 1 ? near[0] : undefined;
+    },
+  ];
+  const pairs: Array<[Replaced, Fresh]> = [];
+  let pending = stash;
+  for (const pass of passes) {
+    pending = pending.filter((s) => {
+      const f = pass(s);
+      if (f) {
+        used.add(f.id);
+        pairs.push([s, f]);
+      }
+      return !f;
+    });
+  }
+
+  const { seen, dated } = seenStatements(db);
+  const setCategory = db.prepare("UPDATE movements SET category_id = ?, category_source = 'manual' WHERE id = ?");
+  const setLabel = db.prepare("UPDATE movements SET label = ?, label_source = 'manual' WHERE id = ?");
+  const setNote = db.prepare('UPDATE movements SET note = ? WHERE id = ?');
+  for (const [s, f] of pairs) {
+    // Ya estaba en una cartola ese día, y con una fecha que el banco pudo cambiar después.
+    if (s.first_seen_day) seen(f.id, s.first_seen_day, s.first_seen_at);
+    if (s.real_date) dated(f.id, s.real_date, s.real_date_source ?? 'banco');
+    if (s.category_source === 'manual') setCategory.run(s.category_id, f.id);
+    if (s.label_source === 'manual') setLabel.run(s.label, f.id);
+    if (s.note) setNote.run(s.note, f.id);
   }
 }
 

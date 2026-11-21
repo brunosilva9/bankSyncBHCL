@@ -7,8 +7,8 @@
 // Formatos reconocidos (los marcados con * ya se pueden importar):
 //   Banco de Chile   .txt cuenta corriente* y línea de crédito*, .xls antiguo de cuenta corriente
 //   BancoEstado      empresa: cartola histórica* y en línea*; persona: cartola histórica y últimos
-//                    movimientos de cuenta corriente, línea de crédito; tarjeta: por facturar
-//   Banco Falabella  .xls de cuenta corriente y de línea de crédito; tarjeta CMR facturada y por facturar
+//                    movimientos de cuenta corriente, línea de crédito; tarjeta: por facturar*
+//   Banco Falabella  .xls de cuenta corriente y de línea de crédito; tarjeta CMR facturada* y por facturar*
 
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
@@ -55,12 +55,13 @@ export const isXls = (b: Uint8Array) => b[0] === 0xd0 && b[1] === 0xcf && b[2] =
 
 // ---------- Vista uniforme de una planilla (.xlsx o .xls) ----------
 
-interface Sheet {
+export interface Sheet {
   name: string;
-  /** Texto de cada celda, fila por fila (las filas vacías se conservan para no correr índices). */
+  /** Texto de cada celda, fila por fila (las filas vacías se conservan para no correr índices). Las fechas
+   * de Excel quedan como AAAA-MM-DD y los números como su texto ("-150000"). */
   rows: string[][];
 }
-interface Workbook {
+export interface Workbook {
   kind: 'xlsx' | 'xls';
   sheets: Sheet[];
   creator: string | null;
@@ -224,6 +225,7 @@ const SIGNATURES: Signature[] = [
         variant: 'movimientos nacionales por facturar',
         accountNumber: null,
         card: m ? { name: m[1].trim() || null, last4: m[2] } : null,
+        supported: !!m,
         evidence: ['título "Últimos Movimientos Nacionales" con la tarjeta', 'columnas Fecha/Descripción/Ciudad/Monto'],
       };
     },
@@ -241,6 +243,7 @@ const SIGNATURES: Signature[] = [
         variant: billed ? 'movimientos facturados' : 'movimientos no facturados',
         accountNumber: null,
         card: { name: 'CMR', last4: '' },
+        supported: true,
         evidence: ['columnas TITULAR/ADICIONAL + CUOTAS PENDIENTES + VALOR CUOTA', `hoja "${s.name}"`],
       };
     },
@@ -317,6 +320,13 @@ function fromBancoChileTxt(bytes: Uint8Array): Detection | null {
     supported: true,
     evidence: ['texto de ancho fijo (121 caracteres) con cuenta y fecha al inicio'],
   };
+}
+
+/** La planilla (.xlsx o .xls) como texto por celda, para los lectores que trabajan sobre la detección. */
+export async function readWorkbook(bytes: Uint8Array): Promise<Workbook | null> {
+  if (isXlsx(bytes)) return loadXlsx(bytes);
+  if (isXls(bytes)) return loadXls(bytes);
+  return null;
 }
 
 /** Qué es este archivo, o null si no se parece a ninguna cartola conocida. */

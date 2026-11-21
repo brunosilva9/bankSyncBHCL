@@ -1,19 +1,28 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { api, qs, NOTE_MAX, type Category, type Movement, type Report, type ReportNote } from '../api';
+import { api, fechaParam, qs, NOTE_MAX, type Category, type DailyBalances, type Movement, type Report, type ReportNote } from '../api';
+import { dayLedger, timelines, timelineSummary, type LedgerDay, type LedgerRow, type Timeline, type TimelinePoint } from '../balances';
+import { chartImageSvg, svgToPng } from '../chartImage';
+import { BalanceChart } from '../components/BalanceChart';
 import { CategorySelect } from '../components/CategorySelect';
+import { CopyImageButton } from '../components/CopyImageButton';
+import { accountNote, balancesCardSvg, dayCardSvg, type DayCardOptions } from '../ledgerImage';
 import { LabelInput } from '../components/LabelInput';
+import { DatesSelect } from '../components/DatesSelect';
+import { MovedBadge } from '../components/MovedBadge';
 import { RangePicker } from '../components/RangePicker';
 import { useFetch, useShared } from '../data';
-import { clp, clpSigned, presetRange, shortDate, type DateRange } from '../format';
+import { clp, clpSigned, inChile, presetRange, shortDate, type DateRange } from '../format';
 import { chronological, groupByCategory, movementTitle, periodText, reportFileName, topPayroll } from '../reportDetail';
 import { type DisplayRow } from '../payroll';
 import { href, navigate } from '../router';
+import { dayOf } from '../seen';
 
-// El informe tiene tres hojas: Resumen (siempre una sola página), Entradas y Gastos.
-// En pantalla se muestran las tres apiladas (las pestañas saltan a cada una); al imprimir
-// salen las tres, cada una en su página.
+// El informe tiene cuatro hojas: Resumen (siempre una sola página), Saldos (el saldo consolidado de cada día),
+// Entradas y Gastos. En pantalla se muestran apiladas (las pestañas saltan a cada una); al imprimir sale cada una
+// en su página.
 const SHEETS = [
   { key: 'resumen', label: 'Resumen' },
+  { key: 'saldos', label: 'Saldos' },
   { key: 'entradas', label: 'Entradas' },
   { key: 'gastos', label: 'Gastos' },
 ] as const;
@@ -22,13 +31,16 @@ type SheetKey = (typeof SHEETS)[number]['key'];
 /** Movimientos que van pegados a la cabecera de cada categoría al imprimir. */
 const HEAD_ROWS = 4;
 
+/** Lo más que entrega la API de movimientos de una vez. */
+const MAX_MOVEMENTS = 5000;
+
 type LinkFn = (p: Record<string, string | number | null | undefined>) => string;
 
 /** Edición de categoría o comentario de un movimiento, igual que en Movimientos. */
 type Edit = { categoryId?: number | null | 'auto'; label?: string | null };
 
 export function ReportPage({ params }: { params: Record<string, string> }) {
-  const { accounts, categories, reload: reloadShared } = useShared();
+  const { accounts, categories, reload: reloadShared, dates } = useShared();
   const range: DateRange = params.from && params.to ? { from: params.from, to: params.to } : presetRange('friday');
   const accountId = params.account ?? '';
   // Las tres hojas se muestran apiladas; la navegación salta a cada una.
@@ -55,11 +67,18 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
     document.getElementById(`hoja-${key}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const { data: report, error, loading, refresh: refreshReport, setData: setReport } = useFetch<Report>(`/api/report${qs({ ...range, accounts: accountId })}`);
+  const fecha = fechaParam(dates);
+  const { data: report, error, loading, refresh: refreshReport, setData: setReport } = useFetch<Report>(`/api/report${qs({ ...range, accounts: accountId, fecha })}`);
   // Mismo criterio que el informe: sin traspasos internos ni giros/amortizaciones de la línea.
-  const detail = { ...range, accountId, excludeInternal: 1, limit: 5000 };
+  const detail = { ...range, accountId, excludeInternal: 1, limit: MAX_MOVEMENTS, fecha };
   const income = useFetch<Movement[]>(`/api/movements${qs({ ...detail, direction: 'A' })}`);
   const expenses = useFetch<Movement[]>(`/api/movements${qs({ ...detail, direction: 'C' })}`);
+  // El saldo de cada día, en el período que muestra el informe (se sabe cuando llega el resumen).
+  const balances = useFetch<DailyBalances>(
+    report ? `/api/balances${qs({ from: report.period.from, to: report.period.to, accounts: accountId, fecha })}` : null,
+  );
+  // El detalle día a día va con el saldo: lleva todos los movimientos, también los traspasos internos.
+  const ledger = useFetch<Movement[]>(`/api/movements${qs({ ...range, accountId, limit: MAX_MOVEMENTS, fecha })}`);
 
   // Edición desde el informe: se aplica en pantalla al instante y recién se reconsulta
   // el resumen para mantener al día, por ejemplo, el conteo de movimientos sin categoría.
@@ -80,6 +99,7 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
     if (edit.label) reloadShared();
     if (edit.categoryId === 'auto' || edit.label === null) list.refresh();
     refreshReport();
+    ledger.refresh();
   };
 
   // Las nóminas solo salen en Gastos; la edición se aplica al lote completo.
@@ -99,6 +119,7 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
     if (edit.label) reloadShared();
     expenses.refresh();
     refreshReport();
+    ledger.refresh();
   };
 
   const movementsLink: LinkFn = (extra) => href('/movimientos', { from: range.from, to: range.to, accountId: accountId || undefined, ...extra });
@@ -144,12 +165,16 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
         <h1>
           {title} <span className="muted sheet-period">{periodText(period)}</span>
         </h1>
-        <span className="sheet-badge">Hoja {n} de 3</span>
+        <span className="sheet-badge">
+          Hoja {n} de {SHEETS.length}
+        </span>
       </div>
       <p className="sheet-meta">
         <strong className="sheet-scope">{scopeName}</strong>
         <small className="muted sheet-note">
-          * Fechas contables del banco: lo hecho en fin de semana, feriado o después del horario de corte se registra el día hábil siguiente.
+          {dates === 'real'
+            ? '* Fechas reales: lo hecho en fin de semana, feriado o después del horario de corte va en el día en que se hizo, aunque el banco lo registre el día hábil siguiente (se indica la fecha del banco).'
+            : '* Fechas contables del banco: lo hecho en fin de semana, feriado o después del horario de corte se registra el día hábil siguiente.'}
         </small>
       </p>
     </header>
@@ -170,7 +195,8 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
             ))}
           </select>
         </label>
-        <button onClick={() => window.print()}>Imprimir / PDF (3 hojas)</button>
+        <DatesSelect />
+        <button onClick={() => window.print()}>Imprimir / PDF ({SHEETS.length} hojas)</button>
       </div>
       <button
         type="button"
@@ -215,12 +241,26 @@ export function ReportPage({ params }: { params: Record<string, string> }) {
             <SummarySheet report={report} movementsLink={movementsLink} />
             <NoteCard note={report.note} onSave={saveNote} />
           </Sheet>
+          <Sheet id="hoja-saldos">
+            {header(2, accountId ? 'Saldo día a día' : 'Saldo consolidado día a día')}
+            <BalanceSheet
+              data={balances.data}
+              error={balances.error ?? ledger.error}
+              movements={ledger.data}
+              hasCredit={report.totals.hasCredit}
+              hasCards={report.totals.hasCards}
+              expectedClosing={report.totals.hasCredit ? report.totals.availableClosing : report.totals.closing}
+              scope={scopeName}
+              caption={`${scopeName} · ${periodText(period)}`}
+              imageName={`${reportFileName(period, scopeName).replace(/^Informe/, 'Saldo')}.png`}
+            />
+          </Sheet>
           <Sheet id="hoja-entradas">
-            {header(2, 'Lo que entró')}
+            {header(3, 'Lo que entró')}
             <IncomeSheet movements={income.data} expectedTotal={report.totals.income} onEdit={(m, edit) => saveEdit(m, edit)} />
           </Sheet>
           <Sheet id="hoja-gastos">
-            {header(3, 'En qué se gastó')}
+            {header(4, 'En qué se gastó')}
             <ExpensesSheet
               movements={expenses.data}
               expectedTotal={report.totals.expenses}
@@ -277,6 +317,13 @@ function SummarySheet({ report, movementsLink }: { report: Report; movementsLink
             href={movementsLink({ categoryKey: 'internal' })}
           />
         )}
+        {t.hasCards && t.cardDebtChange !== 0 && (
+          <Step
+            label={t.cardDebtChange > 0 ? 'Quedó por pagar en tarjetas' : 'Deuda de tarjetas pagada'}
+            value={clpSigned(t.cardDebtChange)}
+            sub="Compras con tarjeta menos pagos del período"
+          />
+        )}
         <Step
           label={t.hasCredit ? 'Disponible final' : 'Saldo final'}
           value={clp(t.hasCredit ? t.availableClosing : t.closing)}
@@ -298,6 +345,7 @@ function SummarySheet({ report, movementsLink }: { report: Report; movementsLink
                   <th className="num">Salió</th>
                   <th className="num">Traspasos internos</th>
                   <th className="num">Saldo final</th>
+                  {t.hasCards && <th className="num">Deuda nueva en tarjeta</th>}
                   {t.hasCredit && <th className="num">Línea disponible</th>}
                   {t.hasCredit && <th className="num">Disponible final</th>}
                 </tr>
@@ -311,6 +359,7 @@ function SummarySheet({ report, movementsLink }: { report: Report; movementsLink
                     <td className="num neg">{clp(a.expenses)}</td>
                     <td className="num">{clpSigned(a.internalIn - a.internalOut)}</td>
                     <td className={`num ${(a.closing ?? 0) < 0 ? 'neg' : ''}`}>{t.hasCredit ? clp(a.closing) : <strong>{clp(a.closing)}</strong>}</td>
+                    {t.hasCards && <td className="num">{a.isCard ? clpSigned(a.cardDebtChange) : ''}</td>}
                     {t.hasCredit && <td className="num">{a.creditLimit !== null ? clp(a.creditAvailableClosing) : ''}</td>}
                     {t.hasCredit && (
                       <td className="num">
@@ -414,10 +463,401 @@ function SummarySheet({ report, movementsLink }: { report: Report; movementsLink
   );
 }
 
-// ---------- Hoja 2: Entradas ----------
+// ---------- Hoja 2: Saldo consolidado día a día ----------
+
+/** Ancho del gráfico al imprimir: la hoja A4 menos los márgenes y el borde de su tarjeta. */
+const PRINT_WIDTH = 660;
+
+/** "mié 18/11" */
+const dayMonth = (day: string) => shortDate(day, true).slice(0, -5);
+
+/** Si el detalle día a día muestra los traspasos con cuentas propias (al comienzo, sí): se recuerda en este navegador. */
+const SHOW_INTERNAL_KEY = 'syncbanks.traspasos';
+const savedShowInternal = () => {
+  try {
+    return localStorage.getItem(SHOW_INTERNAL_KEY) !== '0';
+  } catch {
+    return true;
+  }
+};
+
+/** Qué se sabe del saldo de ese día por las cartolas que se descargaron. */
+export function seenText(p: TimelinePoint): string {
+  if (p.seen === 0) return 'sin cartola ese día';
+  if (p.of > 1) return p.seen === p.of ? 'con cartola de todas las cuentas' : `con cartola de ${p.seen} de ${p.of} cuentas`;
+  return p.lastSeenAt ? `cartola de las ${inChile(p.lastSeenAt).time}` : 'con cartola, sin hora conocida';
+}
+
+/**
+ * El saldo consolidado (el total de las cuentas) al final de cada día: un gráfico, la lista día a día y el detalle
+ * con los movimientos de cada día y el saldo relativo que deja cada uno. Con una sola cuenta, el de esa cuenta.
+ */
+export function BalanceSheet({
+  data,
+  error,
+  movements,
+  hasCredit,
+  hasCards,
+  expectedClosing,
+  scope,
+  caption,
+  imageName,
+}: {
+  data: DailyBalances | null;
+  error: string | null;
+  /** Todos los movimientos del período, también los traspasos internos. */
+  movements: Movement[] | null;
+  hasCredit: boolean;
+  hasCards: boolean;
+  /** El saldo (o disponible) final del resumen: el último punto tiene que ser ese. */
+  expectedClosing: number;
+  /** De qué cuentas es: "Todas las cuentas" o el nombre de la cuenta (para copiar un día). */
+  scope: string;
+  /** Para la imagen del gráfico: las cuentas y el período, y el nombre del archivo si hay que descargarla. */
+  caption: string;
+  imageName: string;
+}) {
+  const { categories, dates } = useShared();
+  const chartCard = useRef<HTMLElement>(null);
+  const [showInternal, setShowInternal] = useState(savedShowInternal);
+  const toggleInternal = (show: boolean) => {
+    setShowInternal(show);
+    try {
+      localStorage.setItem(SHOW_INTERNAL_KEY, show ? '1' : '0');
+    } catch {
+      // Sin almacenamiento (ventana privada): vale para esta visita.
+    }
+  };
+  const series = useMemo(() => (data ? timelines(data) : null), [data]);
+  const ledgerDays = useMemo(
+    () => (data && movements ? dayLedger(data, movements, dates, showInternal) : null),
+    [data, movements, dates, showInternal],
+  );
+  if (error) return <p className="error">{error}</p>;
+  if (!data || !series) return <p className="muted">Cargando…</p>;
+  const { total, accounts } = series;
+  const main = total ?? accounts[0];
+  if (!main) return <p className="card">No hay cuentas con saldo en este informe{hasCards ? ': las tarjetas no tienen saldo' : ''}.</p>;
+  if (main.points.length < 2) return <p className="card">El período todavía no empieza: no hay saldos que mostrar.</p>;
+
+  // Con línea de crédito, el disponible (saldo + línea libre), como en el resumen.
+  const measure = (total ? hasCredit : data.accounts.some((a) => a.accountId === main.accountId && a.hasCredit)) ? 'Disponible' : 'Saldo';
+  const last = main.points[main.points.length - 1].value;
+  const accountDetail = (t: Timeline) => (i: number) => <span className="muted">{seenText(t.points[i])}</span>;
+  const totalDetail = (i: number) => (
+    <ul>
+      {accounts.map((a) => (
+        <li key={a.accountId}>
+          {a.name}: <strong>{clp(a.points[i].value)}</strong> <small className="muted">· {seenText(a.points[i])}</small>
+        </li>
+      ))}
+    </ul>
+  );
+
+  return (
+    <>
+      {last !== expectedClosing && (
+        <p className="warning">
+          El último saldo de esta hoja ({clp(last)}) no es el saldo final del resumen ({clp(expectedClosing)}).
+        </p>
+      )}
+      <section ref={chartCard} className="card balance-card">
+        <TimelineHead
+          timeline={main}
+          measure={measure}
+          action={
+            <CopyImageButton
+              filename={imageName}
+              image={() => {
+                const chart = chartCard.current?.querySelector<SVGSVGElement>('.balance-chart svg');
+                if (!chart) return Promise.reject(new Error('No hay gráfico'));
+                const title = total ? 'Saldo consolidado día a día' : 'Saldo día a día';
+                const { svg, width, height } = chartImageSvg(chart, { title, subtitle: caption, summary: summaryText(main, measure) });
+                return svgToPng(svg, width, height);
+              }}
+            />
+          }
+        />
+        <BalanceChart timeline={main} height={200} printWidth={PRINT_WIDTH} detail={total ? totalDetail : accountDetail(main)} />
+        <p className="muted small balance-key">
+          <span className="mark-key seen" aria-hidden="true" /> con cartola ese día{total ? ' (de todas las cuentas)' : ''} ·{' '}
+          <span className="mark-key unseen" aria-hidden="true" /> sin cartola: sale de los movimientos · sábados y domingos, sombreados
+        </p>
+      </section>
+      <section className="card balance-list">
+        <table className="compact">
+          <thead>
+            <tr>
+              <th>Día</th>
+              <th className="num">
+                {measure}
+                {total ? ' consolidado' : ''}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {main.points.slice(1).map((p) => (
+              <tr key={p.day}>
+                <td className="nowrap">{shortDate(p.day!, true)}</td>
+                <td className="num">{clp(p.value)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <div className="ledger-head">
+        <h2 className="ledger-title">Detalle día a día</h2>
+        <label className="no-print">
+          <input type="checkbox" checked={showInternal} onChange={(e) => toggleInternal(e.target.checked)} /> Mostrar traspasos internos
+        </label>
+      </div>
+      <p className="muted small ledger-note">
+        Saldo relativo: el {total ? 'consolidado' : 'saldo'} después de cada movimiento, en el orden de la cartola de cada cuenta. Dentro
+        del día es aproximado, porque el banco no da la hora; el del final de cada día es el real.{' '}
+        {showInternal
+          ? 'Los traspasos con cuentas propias van atenuados y no suman ni restan: un abono en una cuenta y un cargo en otra se compensan.'
+          : 'Sin los traspasos con cuentas propias: un abono en una cuenta y un cargo en otra se compensan, así que no suman ni restan.'}{' '}
+        Si en un día no se compensan, lo que queda va en una línea.
+        {hasCredit && ' Los giros y amortizaciones de la línea de crédito no van: no cambian el disponible.'}
+      </p>
+      {movements && movements.length >= MAX_MOVEMENTS && (
+        <p className="warning">El período tiene más de 5.000 movimientos: al detalle le pueden faltar algunos.</p>
+      )}
+      {ledgerDays ? (
+        <LedgerTable days={ledgerDays} opening={main.points[0].value} copy={{ scope, multi: total !== null, categories, dates }} />
+      ) : (
+        <p className="muted">Cargando…</p>
+      )}
+    </>
+  );
+}
+
+/** Movimientos de cada día con el saldo relativo que deja cada uno, y el saldo con que terminó el día. */
+function LedgerTable({ days, opening, copy }: { days: LedgerDay[]; opening: number; copy: DayCardOptions }) {
+  const { multi, categories } = copy;
+  const cols = multi ? 6 : 5;
+  const categoryCell = (items: Movement[]) => {
+    if (new Set(items.map((m) => m.category_id)).size > 1) return <span className="muted">(varias)</span>;
+    const c = categories.find((x) => x.id === items[0].category_id);
+    if (!c) return <span className="muted">Sin categoría</span>;
+    return (
+      <>
+        <span className="dot" style={{ background: c.color }} />
+        {c.name}
+      </>
+    );
+  };
+  const amounts = (amount: number, balance: number) => (
+    <>
+      <td className="num pos" data-label="Entró">
+        {amount > 0 ? clp(amount) : ''}
+      </td>
+      <td className="num neg" data-label="Salió">
+        {amount < 0 ? clp(-amount) : ''}
+      </td>
+      <td className="num" data-label="Saldo relativo">
+        {clp(balance)}
+      </td>
+    </>
+  );
+  const account = (m: Movement) =>
+    multi && (
+      <td className="nowrap small" data-label="Cuenta">
+        {m.account_name}
+      </td>
+    );
+  const row = (r: LedgerRow) => {
+    if (r.type === 'gap') {
+      return (
+        <tr key="gap" className="ledger-gap">
+          <td colSpan={cols - 3} className="detail-cell">
+            No cuadra con el día anterior: falta o sobra algún movimiento por cargar
+          </td>
+          {amounts(r.amount, r.balance)}
+        </tr>
+      );
+    }
+    if (r.type === 'internal') {
+      return (
+        <tr key="internal" className="internal">
+          <td colSpan={cols - 3} className="detail-cell">
+            Traspasos con cuentas propias que no se compensan en el día
+          </td>
+          {amounts(r.amount, r.balance)}
+        </tr>
+      );
+    }
+    if (r.type === 'movement') {
+      return (
+        <tr key={r.m.id} className={r.m.system_key === 'internal' ? 'internal' : undefined}>
+          {account(r.m)}
+          <td className="detail-cell">
+            {movementTitle(r.m)}
+            {r.m.label && <small className="muted"> · {r.m.label}</small>}
+            {r.m.provisional === 1 && <small className="badge">provisorio</small>}
+            <MovedBadge items={[r.m]} />
+          </td>
+          <td data-label="Categoría">{categoryCell([r.m])}</td>
+          {amounts(r.amount, r.balance)}
+        </tr>
+      );
+    }
+    const comments = [...new Set(r.items.map((m) => m.label).filter(Boolean))].join(' · ');
+    return (
+      <tr key={r.key}>
+        {account(r.items[0])}
+        <td className="detail-cell">
+          Nómina Pago Fácil · {r.items.length} pagos
+          {r.batchesInDay > 1 && ` · nómina ${r.batch} de ${r.batchesInDay}`}
+          {comments && <small className="muted"> · {comments}</small>}
+          <MovedBadge items={r.items} />
+        </td>
+        <td data-label="Categoría">{categoryCell(r.items)}</td>
+        {amounts(r.amount, r.balance)}
+      </tr>
+    );
+  };
+
+  // Cada día es una tarjeta, como las categorías en Gastos: entre una y otra, un respiro.
+  const gap = (
+    <tbody className="group-gap-body" aria-hidden="true">
+      <tr className="group-gap">
+        <td colSpan={cols} />
+      </tr>
+    </tbody>
+  );
+
+  return (
+    <table className="detail grouped ledger">
+      <thead>
+        <tr>
+          {multi && <th>Cuenta</th>}
+          <th>Detalle</th>
+          <th>Categoría</th>
+          <th className="num">Entró</th>
+          <th className="num">Salió</th>
+          <th className="num">Saldo relativo</th>
+        </tr>
+      </thead>
+      <tbody className="category-group group-end ledger-single">
+        <tr className="group-header">
+          <th colSpan={cols - 1}>Saldo inicial · al empezar el {dayMonth(days[0].day)}</th>
+          <th className="num">{clp(opening)}</th>
+        </tr>
+      </tbody>
+      {days.map((d) => (
+        <Fragment key={d.day}>
+          {gap}
+          {d.rows.length === 0 ? (
+            <tbody className="category-group group-end ledger-single quiet">
+              <tr className="group-header">
+                <th colSpan={cols - 1}>
+                  {shortDate(d.day, true)} <small>· {d.hiddenInternal ? 'solo traspasos con cuentas propias' : 'sin movimientos'}</small>
+                </th>
+                <th className="num">{clp(d.closing)}</th>
+              </tr>
+            </tbody>
+          ) : (
+            <tbody className="category-group group-end">
+              <tr className="group-header">
+                <th colSpan={cols - 1}>{shortDate(d.day, true)}</th>
+                <th className="num">
+                  {/* La foto de la tarjeta del día, para pegarla en un chat o un correo. */}
+                  <CopyImageButton
+                    filename={`Saldo ${d.day.split('-').reverse().join('-')} - ${copy.scope}.png`.replace(/[\/:*?"<>|]/g, '')}
+                    image={() => {
+                      const { svg, width, height } = dayCardSvg(d, copy);
+                      return svgToPng(svg, width, height);
+                    }}
+                  />
+                </th>
+              </tr>
+              {d.rows.map(row)}
+              <tr className="group-subtotal">
+                <td colSpan={cols - 3}>Saldo al final del {dayMonth(d.day)}</td>
+                <td className="num pos">{d.income ? clp(d.income) : ''}</td>
+                <td className="num neg">{d.expenses ? clp(d.expenses) : ''}</td>
+                <td className="num">{clp(d.closing)}</td>
+              </tr>
+            </tbody>
+          )}
+          {/* Otra tarjeta, que se copia aparte: el saldo final de cada cuenta y de qué cartola sale; suman el del día. */}
+          {(d.rows.length > 0 || d.accounts.some((a) => a.cartolas > 0)) && (
+            <>
+              {gap}
+              <tbody className="category-group group-end ledger-balances">
+                <tr className="group-header">
+                  <th colSpan={cols - 1}>Saldo final por cuenta · {dayMonth(d.day)}</th>
+                  <th className="num">
+                    <CopyImageButton
+                      filename={`Saldos ${d.day.split('-').reverse().join('-')} - ${copy.scope}.png`.replace(/[\/:*?"<>|]/g, '')}
+                      image={() => {
+                        const { svg, width, height } = balancesCardSvg(d, copy);
+                        return svgToPng(svg, width, height);
+                      }}
+                    />
+                  </th>
+                </tr>
+                {d.accounts.map((a) => (
+                  <tr key={a.accountId} className="ledger-account">
+                    <td colSpan={cols - 1} className="detail-cell">
+                      {a.name} <small className="muted">· {accountNote(a)}</small>
+                    </td>
+                    <td className="num" data-label="Saldo final">
+                      {clp(a.available)}
+                    </td>
+                  </tr>
+                ))}
+                <tr className="group-subtotal">
+                  <td colSpan={cols - 1}>{multi ? 'Total de las cuentas' : 'Saldo final'}</td>
+                  <td className="num">{clp(d.closing)}</td>
+                </tr>
+              </tbody>
+            </>
+          )}
+        </Fragment>
+      ))}
+    </table>
+  );
+}
+
+/** Lo que dice el encabezado del gráfico, en una línea de texto (para la imagen). */
+function summaryText(timeline: Timeline, measure: string): string {
+  const s = timelineSummary(timeline);
+  const change = s.change === 0 ? 'sin cambio' : clpSigned(s.change);
+  const lowest = s.lowest ? ` · lo más bajo: ${clp(s.lowest.value)} el ${dayMonth(s.lowest.day!)}` : '';
+  return `${timeline.name}: ${measure.toLowerCase()} de ${clp(s.start)} a ${clp(s.end)} (${change})${lowest}`;
+}
+
+/** Nombre de la línea y lo que pasó en el período: de cuánto a cuánto, y lo más bajo si fue entre medio. */
+function TimelineHead({ timeline, measure, action }: { timeline: Timeline; measure: string; action?: ReactNode }) {
+  const s = timelineSummary(timeline);
+  return (
+    <header className="balance-head">
+      <div className="balance-title">
+        <h2>{timeline.name}</h2>
+        {action}
+      </div>
+      <p className="small">
+        {measure} de {clp(s.start)} a <strong>{clp(s.end)}</strong>{' '}
+        <span className={s.change < 0 ? 'neg' : s.change > 0 ? 'pos' : 'muted'}>({s.change === 0 ? 'sin cambio' : clpSigned(s.change)})</span>
+        {s.lowest && (
+          <span className="muted">
+            {' '}
+            · lo más bajo: {clp(s.lowest.value)} el {dayMonth(s.lowest.day!)}
+          </span>
+        )}
+      </p>
+    </header>
+  );
+}
+
+// ---------- Hoja 3: Entradas ----------
 
 function IncomeSheet({ movements, expectedTotal, onEdit }: { movements: Movement[] | null; expectedTotal: number; onEdit: (m: Movement, edit: Edit) => void }) {
-  const rows = useMemo(() => chronological(movements ?? []), [movements]);
+  const { dates } = useShared();
+  const rows = useMemo(() => chronological(movements ?? [], dates), [movements, dates]);
   if (!movements) return <p className="muted">Cargando…</p>;
   const total = rows.reduce((s, m) => s + m.amount, 0);
   return (
@@ -437,11 +877,12 @@ function IncomeSheet({ movements, expectedTotal, onEdit }: { movements: Movement
         <tbody>
           {rows.map((m) => (
             <tr key={m.id}>
-              <td className="nowrap" data-label="Fecha">{shortDate(m.date)}</td>
+              <td className="nowrap" data-label="Fecha">{shortDate(dayOf(m, dates))}</td>
               <td className="nowrap" data-label="Cuenta">{m.account_name}</td>
               <td className="detail-cell">
                 {movementTitle(m)}
                 {m.provisional === 1 && <small className="badge">provisorio</small>}
+                <MovedBadge items={[m]} />
               </td>
               <td className="no-print" data-label="Comentario">
                 <LabelInput value={m.label ?? ''} fromRule={m.label_source === 'rule'} onCommit={(label) => onEdit(m, { label })} />
@@ -465,7 +906,7 @@ function IncomeSheet({ movements, expectedTotal, onEdit }: { movements: Movement
   );
 }
 
-// ---------- Hoja 3: Gastos por categoría ----------
+// ---------- Hoja 4: Gastos por categoría ----------
 
 function ExpensesSheet({
   movements,
@@ -480,17 +921,19 @@ function ExpensesSheet({
   onEditOne: (m: Movement, edit: Edit) => void;
   onEditAll: (ids: number[], edit: Edit) => void;
 }) {
-  const groups = useMemo(() => groupByCategory(movements ?? [], categories), [movements, categories]);
+  const { dates } = useShared();
+  const groups = useMemo(() => groupByCategory(movements ?? [], categories, dates), [movements, categories, dates]);
   if (!movements) return <p className="muted">Cargando…</p>;
   const total = groups.reduce((s, g) => s + g.total, 0);
   const renderRow = (r: DisplayRow) =>
     r.type === 'single' ? (
       <tr key={r.m.id}>
-        <td className="nowrap" data-label="Fecha">{shortDate(r.m.date)}</td>
+        <td className="nowrap" data-label="Fecha">{shortDate(dayOf(r.m, dates))}</td>
         <td className="nowrap small" data-label="Cuenta">{r.m.account_name}</td>
         <td className="detail-cell">
           {movementTitle(r.m)}
           {r.m.provisional === 1 && <small className="badge">provisorio</small>}
+          <MovedBadge items={[r.m]} />
         </td>
         {/* El comentario editable solo en pantalla; al imprimir queda el texto. */}
         <td className="small" data-label="Comentario">
@@ -513,11 +956,12 @@ function ExpensesSheet({
         const comments = [...new Set(r.items.map((m) => m.label).filter(Boolean))].join(' · ');
         return (
           <tr key={r.key}>
-            <td className="nowrap" data-label="Fecha">{shortDate(r.items[0].date)}</td>
+            <td className="nowrap" data-label="Fecha">{shortDate(dayOf(r.items[0], dates))}</td>
             <td className="nowrap small" data-label="Cuenta">{r.items[0].account_name}</td>
             <td className="detail-cell">
               Nómina Pago Fácil · {r.items.length} pagos
               {r.batchesInDay > 1 && ` · nómina ${r.batch} de ${r.batchesInDay}`}
+              <MovedBadge items={r.items} />
             </td>
             <td className="small" data-label="Comentario">
               <span className="no-print">

@@ -1,0 +1,41 @@
+# Producción: la app detrás de Caddy, que obtiene y renueva solo el certificado HTTPS (Let's Encrypt).
+# Paso a paso en DESPLIEGUE.md. Lee DB_KEY y DOMAIN del archivo .env de esta carpeta (fuera de git).
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      TZ: America/Santiago
+      # La app no publica puertos: solo Caddy llega a ella, por la red interna de Docker. Por eso se
+      # cree su X-Forwarded-For, y el límite de intentos de login ve la IP real de cada persona.
+      TRUST_PROXY: loopback, uniquelocal
+    volumes:
+      - ./data:/app/data
+      - ./backups:/app/backups
+    logging:
+      driver: local
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      DOMAIN: ${DOMAIN:?Falta DOMAIN en .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    logging:
+      driver: local
+
+volumes:
+  # Certificados de Caddy: si se pierden, los vuelve a pedir solo.
+  caddy_data:
+  caddy_config:

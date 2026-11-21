@@ -1,15 +1,32 @@
 import type { DB } from '../db.js';
+import { chileDay } from '../time.js';
 import { usedDelta } from './creditLine.js';
+
+/**
+ * Por qué fecha va cada movimiento. 'real' (por defecto): el día en que pasó o en que ya aparecía en una cartola
+ * (ver seen.ts), así lo hecho un viernes en la noche cuenta el viernes aunque el banco lo feche el lunes.
+ * 'banco': la fecha contable, la que imprime el banco.
+ */
+export type DateMode = 'real' | 'banco';
+
+/** El día de un movimiento en SQL, según el modo; `alias` es el de la tabla movements en la consulta. */
+export const dayColumn = (dates: DateMode = 'real', alias?: string) => {
+  const p = alias ? `${alias}.` : '';
+  return dates === 'banco' ? `${p}date` : `COALESCE(${p}real_date, ${p}date)`;
+};
 
 export interface ReportParams {
   from: string; // YYYY-MM-DD, inclusive
   to: string; // YYYY-MM-DD, inclusive
   accountIds?: number[];
+  dates?: DateMode;
 }
 
 interface Row {
   id: number;
   account_id: number;
+  /** Día del movimiento en el informe: el real o el del banco, según el modo. */
+  day: string;
   date: string;
   seq: number;
   amount: number;
@@ -51,12 +68,17 @@ export interface AccountSummary {
   /** Primer día con movimientos cargados; antes de eso el saldo inicial no es confiable. */
   coverageFrom: string | null;
   coverageTo: string | null;
+  /** Tarjeta de crédito: no tiene saldo (opening/closing null). */
+  isCard: boolean;
+  /** Tarjeta: cuánto subió la deuda en el período (cargos − abonos); 0 en las cuentas. */
+  cardDebtChange: number;
 }
 
 interface AccountRow {
   id: number;
   name: string;
   number: string;
+  kind: string;
   credit_limit: number | null;
   credit_used_anchor: number | null;
 }
@@ -65,22 +87,24 @@ type StateRow = { balance_after: number; credit_used_after: number | null; amoun
 
 export function buildReport(db: DB, params: ReportParams) {
   const accounts = (
-    db.prepare('SELECT id, name, number, credit_limit, credit_used_anchor FROM accounts ORDER BY name').all() as AccountRow[]
+    db.prepare('SELECT id, name, number, kind, credit_limit, credit_used_anchor FROM accounts ORDER BY name').all() as AccountRow[]
   ).filter((a) => !params.accountIds?.length || params.accountIds.includes(a.id));
   const ids = accounts.map((a) => a.id);
   if (ids.length === 0) return emptyReport(params);
   const inIds = `(${ids.map(() => '?').join(',')})`;
+  const real = (params.dates ?? 'real') === 'real';
+  const DAY = dayColumn(params.dates, 'm');
 
   const rows = db
     .prepare(
-      `SELECT m.id, m.account_id, m.date, m.seq, m.amount, m.direction, m.description, m.kind, m.counterparty,
+      `SELECT m.id, m.account_id, ${DAY} AS day, m.date, m.seq, m.amount, m.direction, m.description, m.kind, m.counterparty,
               m.category_id, c.name AS category_name, c.color AS category_color, c.system_key, m.label,
               m.balance_after, m.credit_used_after, m.payroll_batch, p.name AS payee_name
        FROM movements m
        LEFT JOIN categories c ON c.id = m.category_id
        LEFT JOIN payees p ON p.rut = m.counterparty AND m.kind = 'payroll'
-       WHERE m.account_id IN ${inIds} AND m.date BETWEEN ? AND ?
-       ORDER BY m.date DESC, m.seq ASC`,
+       WHERE m.account_id IN ${inIds} AND ${DAY} BETWEEN ? AND ?
+       ORDER BY ${DAY} DESC, m.date DESC, m.seq ASC`,
     )
     .all(...ids, params.from, params.to) as Row[];
 
@@ -89,6 +113,20 @@ export function buildReport(db: DB, params: ReportParams) {
   const firstFrom = db.prepare(`SELECT ${cols} FROM movements WHERE account_id = ? AND date >= ? ORDER BY date ASC, seq DESC LIMIT 1`);
   const lastUntil = db.prepare(`SELECT ${cols} FROM movements WHERE account_id = ? AND date <= ? ORDER BY date DESC, seq ASC LIMIT 1`);
   const coverage = db.prepare('SELECT MIN(date) AS f, MAX(date) AS t FROM movements WHERE account_id = ?');
+  // Por fecha real, los saldos del banco se corrigen con lo que ya pasó pero el banco fechó después: al inicio, lo
+  // hecho antes de `from` con fecha desde `from`; al final, lo hecho hasta `to` con fecha posterior. (El banco ya lo
+  // descuenta del saldo que informa al descargar la cartola: así cuadran.)
+  const shiftedBefore = db.prepare('SELECT amount, direction, kind FROM movements WHERE account_id = ? AND COALESCE(real_date, date) < ? AND date >= ?');
+  const shiftedUntil = db.prepare('SELECT amount, direction, kind FROM movements WHERE account_id = ? AND COALESCE(real_date, date) <= ? AND date > ?');
+  type Moved = { amount: number; direction: 'C' | 'A'; kind: string };
+  const shift = (moved: Moved[]) => ({
+    balance: moved.reduce((s, m) => s + (m.direction === 'A' ? m.amount : -m.amount), 0),
+    used: moved.reduce((s, m) => s + usedDelta(m), 0),
+  });
+  const NO_SHIFT = { balance: 0, used: 0 };
+
+  // dailyBalances (daily.ts) calcula estos mismos saldos día por día en una pasada: lo que cambie aquí en cómo se
+  // calcula el saldo o el disponible va también allá (test/balances.test.ts compara los dos).
 
   /** Saldo y uso de la línea justo antes del primer movimiento del día `date`. */
   function stateAtStart(accountId: number, date: string) {
@@ -110,14 +148,21 @@ export function buildReport(db: DB, params: ReportParams) {
   const isNeutral = (r: Row) => isInternal(r) || isCreditMove(r);
 
   const perAccount: AccountSummary[] = accounts.map((a) => {
-    const start = stateAtStart(a.id, params.from);
-    const end = lastUntil.get(a.id, params.to) as StateRow | undefined;
-    const opening = start?.balance ?? null;
-    const closing = end?.balance_after ?? opening;
+    // La tarjeta no tiene saldo (sus archivos no traen la deuda): sus compras cuentan como gasto y lo que
+    // falta pagar se informa aparte (cardDebtChange), para que el resumen siga cuadrando.
+    const isCard = a.kind === 'tarjeta_credito';
+    const start = isCard ? null : stateAtStart(a.id, params.from);
+    const end = isCard ? undefined : (lastUntil.get(a.id, params.to) as StateRow | undefined);
+    const atStart = real && start ? shift(shiftedBefore.all(a.id, params.from, params.from) as Moved[]) : NO_SHIFT;
+    const atEnd = real && start ? shift(shiftedUntil.all(a.id, params.to, params.to) as Moved[]) : NO_SHIFT;
+    const bankOpening = start?.balance ?? null;
+    const bankClosing = end?.balance_after ?? bankOpening;
+    const opening = bankOpening === null ? null : bankOpening + atStart.balance;
+    const closing = bankClosing === null ? null : bankClosing + atEnd.balance;
     const tracked = creditTracked.has(a.id);
-    const avail = (used: number | null | undefined) => (tracked && used !== null && used !== undefined ? a.credit_limit! - used : null);
-    const creditAvailableOpening = avail(start?.used);
-    const creditAvailableClosing = end ? avail(end.credit_used_after) : creditAvailableOpening;
+    const avail = (used: number | null | undefined, delta: number) => (tracked && used !== null && used !== undefined ? a.credit_limit! - (used + delta) : null);
+    const creditAvailableOpening = avail(start?.used, atStart.used);
+    const creditAvailableClosing = avail(end ? end.credit_used_after : start?.used, atEnd.used);
 
     const cov = coverage.get(a.id) as { f: string | null; t: string | null };
     const mine = rows.filter((r) => r.account_id === a.id);
@@ -141,10 +186,23 @@ export function buildReport(db: DB, params: ReportParams) {
       availableClosing: closing === null ? null : closing + (creditAvailableClosing ?? 0),
       coverageFrom: cov.f,
       coverageTo: cov.t,
+      isCard,
+      cardDebtChange: isCard ? sum((r) => r.direction === 'C') - sum((r) => r.direction === 'A') : 0,
     };
   });
 
-  type NumericKey = 'opening' | 'closing' | 'income' | 'expenses' | 'internalIn' | 'internalOut' | 'availableOpening' | 'availableClosing' | 'creditAvailableOpening' | 'creditAvailableClosing';
+  type NumericKey =
+    | 'opening'
+    | 'closing'
+    | 'income'
+    | 'expenses'
+    | 'internalIn'
+    | 'internalOut'
+    | 'availableOpening'
+    | 'availableClosing'
+    | 'creditAvailableOpening'
+    | 'creditAvailableClosing'
+    | 'cardDebtChange';
   const total = (k: NumericKey) => perAccount.reduce((s, a) => s + (a[k] ?? 0), 0);
 
   const external = rows.filter((r) => !isNeutral(r));
@@ -152,9 +210,11 @@ export function buildReport(db: DB, params: ReportParams) {
   const warnings: string[] = [];
   for (const a of perAccount) {
     if (a.coverageFrom && params.from < a.coverageFrom) {
-      warnings.push(`${a.name}: hay movimientos cargados solo desde el ${a.coverageFrom}; el saldo inicial corresponde a esa fecha.`);
+      warnings.push(
+        `${a.name}: hay movimientos cargados solo desde el ${a.coverageFrom}${a.isCard ? '.' : '; el saldo inicial corresponde a esa fecha.'}`,
+      );
     }
-    if (a.coverageTo && params.to > a.coverageTo && a.coverageTo < new Date().toISOString().slice(0, 10)) {
+    if (a.coverageTo && params.to > a.coverageTo && a.coverageTo < chileDay()) {
       warnings.push(`${a.name}: la última cartola cargada llega hasta el ${a.coverageTo}.`);
     }
   }
@@ -163,7 +223,7 @@ export function buildReport(db: DB, params: ReportParams) {
     params,
     // Lo que realmente trae la información: del primer al último día con movimientos dentro del filtro
     // (ej. filtro hasta el 18/10 pero la última cartola llega al 13/10).
-    period: rows.length ? { from: rows[rows.length - 1].date, to: rows[0].date } : { from: params.from, to: params.to },
+    period: rows.length ? { from: rows[rows.length - 1].day, to: rows[0].day } : { from: params.from, to: params.to },
     accounts: perAccount,
     totals: {
       opening: total('opening'),
@@ -176,6 +236,9 @@ export function buildReport(db: DB, params: ReportParams) {
       creditAvailableClosing: total('creditAvailableClosing'),
       availableOpening: total('availableOpening'),
       availableClosing: total('availableClosing'),
+      hasCards: perAccount.some((a) => a.isCard),
+      // Saldo final = inicial + entró − salió ± traspasos + esto: lo comprado con tarjeta que aún no se paga.
+      cardDebtChange: total('cardDebtChange'),
     },
     payroll: payrollBatches(rows, accounts),
     uncategorizedCount: external.filter((r) => r.category_id === null).length,
@@ -196,27 +259,35 @@ function payrollBatches(rows: Row[], accounts: Array<{ id: number; name: string 
     /** Comentarios distintos puestos a los pagos de la nómina, en el orden de la cartola. */
     comments: string[];
   };
-  const map = new Map<string, Batch>();
+  // Una nómina es un bloque del día del banco (payroll_batch). Por fecha real, en un día pueden quedar nóminas de
+  // dos fechas del banco (la de la tarde y la que se cargó de noche): se numeran de nuevo en el orden en que se
+  // hicieron, como en Nóminas.
+  const map = new Map<string, Batch & { bankDate: string; bankBatch: number }>();
   for (const r of rows.filter((r) => r.kind === 'payroll')) {
-    const batch = r.payroll_batch ?? 1;
-    const k = `${r.account_id}|${r.date}|${batch}`;
+    const bankBatch = r.payroll_batch ?? 1;
+    const k = `${r.account_id}|${r.date}|${bankBatch}`;
     const b = map.get(k) ?? {
       accountId: r.account_id,
       accountName: accounts.find((a) => a.id === r.account_id)!.name,
-      date: r.date,
-      batch,
+      date: r.day,
+      batch: 0,
       batchesInDay: 0,
       total: 0,
       count: 0,
       comments: [],
+      bankDate: r.date,
+      bankBatch,
     };
     b.total += r.amount;
     b.count++;
     if (r.label && !b.comments.includes(r.label)) b.comments.push(r.label);
     map.set(k, b);
   }
-  const batches = [...map.values()];
-  for (const b of batches) b.batchesInDay = batches.filter((o) => o.accountId === b.accountId && o.date === b.date).length;
+  const all = [...map.values()];
+  const batches: Batch[] = all.map(({ bankDate, bankBatch, ...b }) => {
+    const sameDay = all.filter((o) => o.accountId === b.accountId && o.date === b.date).sort((x, y) => x.bankDate.localeCompare(y.bankDate) || x.bankBatch - y.bankBatch);
+    return { ...b, batch: sameDay.findIndex((o) => o.bankDate === bankDate && o.bankBatch === bankBatch) + 1, batchesInDay: sameDay.length };
+  });
   return batches.sort((a, b) => b.date.localeCompare(a.date) || a.accountName.localeCompare(b.accountName) || a.batch - b.batch);
 }
 
@@ -236,6 +307,8 @@ function emptyReport(params: ReportParams) {
       creditAvailableClosing: 0,
       availableOpening: 0,
       availableClosing: 0,
+      hasCards: false,
+      cardDebtChange: 0,
     },
     payroll: [],
     uncategorizedCount: 0,

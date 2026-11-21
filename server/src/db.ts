@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import Database from 'better-sqlite3-multiple-ciphers';
+import { backfillFirstSeen } from './domain/seen.js';
 
 export type DB = Database.Database;
 
@@ -84,20 +85,46 @@ CREATE TABLE IF NOT EXISTS payees (
 
 -- Comentario que acompaña al informe (hoja 1). Va ligado al período real del informe y a las
 -- cuentas filtradas (scope: '' = todas; si no, ids ordenados separados por coma).
+-- user_id (también en imports) es quien lo escribió: un id de usuarios.db, que es otra base.
 CREATE TABLE IF NOT EXISTS report_notes (
   scope TEXT NOT NULL,
   from_date TEXT NOT NULL,
   to_date TEXT NOT NULL,
   text TEXT NOT NULL,
-  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  user_id INTEGER,
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (scope, from_date, to_date)
 );
 
+-- Cierre diario: lo que se sabía de un día a la hora del cierre (02:00 del día siguiente), congelado. No se
+-- reescribe: si después llega algo que cambia ese día, se nota al comparar movements_hash con el de ahora.
+-- Cada cierre lleva el hash del anterior, así que alterar uno a mano rompe la cadena (ver verifyClosings).
+CREATE TABLE IF NOT EXISTS closings (
+  id INTEGER PRIMARY KEY,
+  day TEXT NOT NULL UNIQUE,     -- YYYY-MM-DD, día de Chile
+  closed_at TEXT NOT NULL,      -- instante del cierre, UTC (ISO)
+  report TEXT NOT NULL,         -- JSON: informe del día, movimientos e hitos por cuenta, cobertura
+  movements_hash TEXT NOT NULL, -- huella de los movimientos del día, sin categorías ni comentarios
+  prev_hash TEXT,
+  hash TEXT NOT NULL,
+  app_version TEXT
+);
+`;
+
+// Base de acceso, una para toda la app. Los datos de cada usuario van en su propia base (data_file).
+const AUTH_SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY,
   username TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'usuario' CHECK (role IN ('admin', 'usuario')),
+  -- Administrador que creó y gestiona a este usuario.
+  admin_id INTEGER REFERENCES users(id),
+  -- Base con las cuentas y movimientos de este usuario, relativa a la carpeta de datos.
+  data_file TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  -- Administrador: usuario cuyas cuentas está viendo (NULL = las suyas). Se recuerda entre sesiones.
+  view_user_id INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -123,7 +150,7 @@ const DEFAULT_CATEGORIES: Array<[name: string, color: string, systemKey: string 
   ['Otros', '#64748b', null],
 ];
 
-export function openDb(file: string, key: string): DB {
+function openEncrypted(file: string, key: string): DB {
   if (!key) throw new Error('Falta DB_KEY: la base de datos siempre va cifrada.');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
@@ -136,9 +163,22 @@ export function openDb(file: string, key: string): DB {
     throw new Error('No se pudo abrir la base de datos: DB_KEY incorrecta o archivo dañado.');
   }
   db.pragma('foreign_keys = ON');
+  return db;
+}
+
+/** Base con los datos de un usuario: cuentas, movimientos, categorías, reglas... */
+export function openDb(file: string, key: string): DB {
+  const db = openEncrypted(file, key);
   db.exec(SCHEMA);
   migrate(db);
   seed(db);
+  return db;
+}
+
+/** Base de acceso: usuarios, roles y sesiones. */
+export function openAuthDb(file: string, key: string): DB {
+  const db = openEncrypted(file, key);
+  db.exec(AUTH_SCHEMA);
   return db;
 }
 
@@ -161,12 +201,47 @@ const ADDED_COLUMNS: Array<[table: string, column: string, definition: string]> 
   // Corte manual: este pago es el último de su nómina; los de abajo en la cartola son otra nómina.
   // Sirve cuando dos nóminas se cargaron seguidas y en la cartola aparecen como un solo bloque.
   ['movements', 'payroll_split_after', 'INTEGER NOT NULL DEFAULT 0'],
+  // Tarjetas de crédito (cuenta sin saldo; ver server/src/domain/creditCard.ts).
+  ['accounts', 'kind', "TEXT NOT NULL DEFAULT 'cuenta_corriente'"],
+  // Compra en cuotas: cuántas son (si el banco lo informa) y el valor de cada una.
+  ['movements', 'installments', 'INTEGER'],
+  ['movements', 'installment_amount', 'INTEGER'],
+  // Cuándo se descargó cada archivo (UTC, ISO) y de dónde salió esa hora: banco | archivo | subida.
+  ['imports', 'observed_at', 'TEXT'],
+  ['imports', 'observed_source', 'TEXT'],
+  // Primera cartola que trajo el movimiento: su día de Chile y su hora de descarga, si se sabe. La fecha real es la
+  // más temprana que se conoce; si es anterior a la del banco, el banco lo pasó a un día posterior (ver domain/seen.ts).
+  ['movements', 'first_seen_day', 'TEXT'],
+  ['movements', 'first_seen_at', 'TEXT'],
+  ['movements', 'real_date', 'TEXT'],
+  ['movements', 'real_date_source', 'TEXT'],
 ];
 
 function migrate(db: DB) {
+  const added = new Set<string>();
   for (const [table, column, definition] of ADDED_COLUMNS) {
     const exists = (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).some((c) => c.name === column);
-    if (!exists) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    if (!exists) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      added.add(`${table}.${column}`);
+    }
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS movements_real_date ON movements(real_date)');
+  // También si quedó algún movimiento sin fecha real (cargado por una versión anterior de la app).
+  if (added.has('movements.real_date') || db.prepare('SELECT 1 FROM movements WHERE real_date IS NULL LIMIT 1').get()) {
+    db.transaction(() => backfillFirstSeen(db))();
+  }
+  // Antes de las cuentas por usuario, los usuarios vivían en esta misma base y report_notes los
+  // referenciaba: con un usuario de usuarios.db fallaría la clave foránea. SQLite no permite quitarla,
+  // así que se rehace la tabla (con sus datos). Las tablas users y sessions viejas quedan sin uso.
+  if ((db.prepare('PRAGMA foreign_key_list(report_notes)').all() as unknown[]).length > 0) {
+    db.transaction(() => {
+      db.exec(`ALTER TABLE report_notes RENAME TO report_notes_old`);
+      db.exec(SCHEMA);
+      db.exec(`INSERT INTO report_notes (scope, from_date, to_date, text, user_id, updated_at)
+               SELECT scope, from_date, to_date, text, user_id, updated_at FROM report_notes_old`);
+      db.exec('DROP TABLE report_notes_old');
+    })();
   }
 }
 

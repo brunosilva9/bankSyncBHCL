@@ -58,9 +58,11 @@ Monorepo con tres `package.json`: raíz (orquestación), `server/` y `web/`.
 │   dominio: importer · categorize · classify · creditLine · report
 │   parser:  cartola.ts (txt BCh) · bancoestado.ts (xlsx)          │
 └───────────────┬────────────────────────────────────────────────┘
-                │ better-sqlite3
+                │ better-sqlite3 (server/src/store.ts)
                 ▼
-        data/syncbanks.db  (SQLCipher, cifrado en disco)
+   data/usuarios.db          usuarios, roles, sesiones
+   data/bases/<uuid>.db      una base por usuario con sus cuentas
+   (SQLCipher, todo cifrado en disco con la misma DB_KEY)
 ```
 
 En desarrollo: `npm run dev` levanta la API en `:3001` y Vite en `:5173`; Vite redirige `/api` al
@@ -72,9 +74,9 @@ para las cookies de sesión).
 
 ### 4.1 Arranque y configuración
 
-- `server/src/index.ts` abre la base y arranca Express. Si no hay usuarios, avisa por consola.
+- `server/src/index.ts` abre las bases (`openStore`) y arranca Express. Si no hay usuarios, avisa por consola.
 - `server/src/config.ts` lee el entorno con *defaults*: `PORT` (3001), `DB_PATH`
-  (`data/syncbanks.db`), `DB_KEY`, `SESSION_DAYS` (7), `NODE_ENV`, `WEB_DIST`.
+  (`data/syncbanks.db`: su carpeta es la carpeta de datos), `DB_KEY`, `SESSION_DAYS` (7), `NODE_ENV`, `WEB_DIST`.
   En desarrollo los scripts cargan `../.env` con `--env-file-if-exists`.
 
 ### 4.2 Base de datos (`server/src/db.ts`)
@@ -89,8 +91,22 @@ para las cookies de sesión).
   **de sistema** (`system_key`: `payroll`, `bank_fee`, `credit_line`, `loan`, `internal`) y no se
   pueden borrar.
 
-Tablas: `accounts`, `categories`, `imports`, `movements`, `rules`, `payees`, `report_notes`, `users`,
-`sessions`. Detalle en la sección 7.
+Dos esquemas: la **base de cada usuario** (`openDb`: `accounts`, `categories`, `imports`, `movements`,
+`rules`, `payees`, `report_notes`) y la **base de acceso** (`openAuthDb`: `users`, `sessions`). Detalle en
+la sección 7.
+
+### 4.2.1 Una base por usuario (`server/src/store.ts`)
+
+- `Store` abre `usuarios.db` y, a pedido, la base de cada usuario (`users.data_file`, relativa a la
+  carpeta de datos); las deja abiertas. Se eligió una base por usuario en vez de una columna `user_id`
+  en cada tabla: las restricciones de unicidad (número de cuenta, nombre de categoría, RUT del
+  trabajador) siguen valiendo por usuario sin rehacer tablas, ninguna consulta puede mezclar cuentas
+  de dos usuarios por olvidar un filtro, y pasarle las cuentas a otro usuario es cambiar a qué archivo
+  apunta (`transferData`).
+- **Migración de bases anteriores:** si `usuarios.db` está vacía y existe la base de siempre
+  (`DB_PATH`), sus usuarios se copian como administradores (con el mismo id) apuntando a esa base.
+  `report_notes` se rehace sin la clave foránea a `users` (los autores ahora viven en otra base). Las
+  tablas `users`/`sessions` viejas quedan sin uso.
 
 ### 4.3 Autenticación y seguridad (`server/src/auth.ts`)
 
@@ -101,23 +117,32 @@ Tablas: `accounts`, `categories`, `imports`, `movements`, `rules`, `payees`, `re
   `SESSION_DAYS`; las sesiones vencidas se purgan al crear una nueva.
 - **Límite de intentos:** `loginLimiter` bloquea por IP tras 10 fallos en 15 min (en memoria; suficiente
   para un solo servidor).
+- **Roles:** `usuario` usa la app con sus cuentas; `admin` además gestiona a los usuarios que creó
+  (`users.admin_id`) y puede ver sus cuentas (`users.view_user_id`). `requireAuth` deja en el pedido
+  `user` (quién entró) y `owner` (de quién son las cuentas que ve); la vista elegida se valida en cada
+  pedido, así que si el usuario se desactiva el administrador vuelve a las suyas.
 - **CSRF:** además de `SameSite=Strict`, todo método no-GET debe traer el header
   `x-requested-with: syncbanks` (`server/src/app.ts:76`), que un formulario de otro sitio no puede
   enviar.
 
 ### 4.4 API (`server/src/app.ts`)
 
-Todo pasa por `/api`. `requireAuth` protege el router; las rutas principales:
+Todo pasa por `/api`. `requireAuth` protege el router. Las rutas de datos se arman una vez por base
+(`dataRoutes(db)`) y cada pedido va a la base de su `owner`. Si la página manda `x-syncbanks-owner` con
+otro dueño (un administrador que cambió de cuentas en otra pestaña), se rechaza con 409 para que no
+edite por id en la base equivocada. Las rutas principales:
 
 | Método y ruta | Qué hace |
 |---|---|
-| `POST /api/auth/login` · `logout` · `GET /auth/me` | Sesión |
-| `GET /api/accounts` · `PATCH /api/accounts/:id` | Listar/editar cuentas (nombre, RUT, alias, cupo, calibrar línea) |
+| `POST /api/auth/login` · `logout` · `GET /auth/me` | Sesión (`me` dice rol y de quién son las cuentas que ve) |
+| `GET/POST /api/admin/users` · `PUT /api/admin/users/:id/password` · `PUT .../active` | Administrador: sus usuarios |
+| `PUT /api/admin/view` | Administrador: ver las cuentas de uno de sus usuarios (o las propias) |
+| `GET /api/accounts` · `PATCH /api/accounts/:id` · `DELETE /api/accounts/:id` | Listar/editar cuentas (nombre, RUT, alias, cupo, calibrar línea) y eliminarlas con sus movimientos |
 | `GET/POST/PATCH/DELETE /api/categories` | Categorías |
 | `GET /api/movements` · `PATCH /api/movements/:id` · `POST /api/movements/bulk` | Listar (con muchos filtros) y editar movimiento(s) |
 | `GET/POST/DELETE /api/rules` | Reglas por contraparte o texto |
 | `GET /api/payees` · `PUT /api/payees/:rut` | Nombres de trabajadores (Pago Fácil) |
-| `POST /api/imports` · `GET /api/imports` | Importar cartola (cuerpo binario) e historial |
+| `POST /api/imports` · `GET /api/imports` | Importar cartola (cuerpo binario) e historial. A un administrador, si la cuenta es nueva ahí pero ya está en otra de sus bases, le responde 409 `account-elsewhere`; con `x-import-anyway: 1` la importa igual |
 | `GET /api/report` · `PUT /api/report-note` | Informe y comentario del informe |
 | `GET /api/integrity` | Advertencias de saldos que no calzan |
 
@@ -163,14 +188,21 @@ calcula en `buildReport`.
   **contenido** (título, columnas, nombre de hoja), con una "firma" por formato, y devuelve el número
   de cuenta o tarjeta si viene, la evidencia y si ya se puede importar. Cubre Banco de Chile, BancoEstado
   (empresa y persona, cuenta, línea y tarjeta) y Banco Falabella (cuenta, línea y CMR).
+- **`creditCard.ts`** — tarjetas de crédito (CMR de Banco Falabella y BancoEstado por facturar) sobre la
+  planilla que ya leyó `detect.ts`. Cada fila es una compra completa en su fecha (en BancoEstado, cuota ×
+  número de cuotas); `sameCardPurchase` reconoce la misma compra cuando reaparece con otra redacción o
+  fecha. La importación (`server/src/domain/creditCard.ts`) agrega solo las compras nuevas y confirma las
+  de CMR que estaban por facturar.
 - **`index.ts`** — `parseStatementFile`: lo que ya se importaba (Banco de Chile `.txt`, BancoEstado
-  empresa) sigue por su lector; los formatos reconocidos que aún no se importan responden qué son.
+  empresa) sigue por su lector, las tarjetas por `creditCard.ts` (devuelve `ParsedCard`, ver `isCard`) y
+  los formatos reconocidos que aún no se importan responden qué son.
 
 ### 4.7 CLI (`server/src/cli/`)
 
-Mismos módulos del dominio, usados desde consola: `addUser.ts` (crear usuario), `importFiles.ts`
-(importar cartolas) y `backup.ts` (respaldo cifrado con `VACUUM INTO`, que incluye el WAL y se puede
-correr con la app abierta).
+Mismos módulos del dominio, usados desde consola: `addUser.ts` (crear administrador),
+`setPassword.ts`, `transferData.ts` (pasar las cuentas de un usuario a otro), `importFiles.ts`
+(importar cartolas a las cuentas de un usuario) y `backup.ts` (respaldo cifrado de todas las bases con
+`VACUUM INTO`, que incluye el WAL y se puede correr con la app abierta).
 
 ## 5. Frontend
 
@@ -185,11 +217,14 @@ correr con la app abierta).
   según la ruta.
 - **Páginas** (`web/src/pages/`): `LoginPage`, `ImportPage` (sube archivos), `MovementsPage` (lista
   filtrable y edición de categoría/comentario/nota), `PayrollPage` (nóminas por trabajador),
-  `ReportPage` (las 3 hojas) y `SettingsPage` (cuentas, categorías, reglas, trabajadores).
-- **Utilidades con tests** (`format`, `payroll`, `reportDetail`) concentran la lógica de presentación
-  (formato CLP/fechas, agrupación de nóminas, agrupación por categoría del informe).
+  `ReportPage` (las 4 hojas), `SettingsPage` (cuentas, categorías, reglas, trabajadores) y `UsersPage`
+  (solo administradores: sus usuarios). En la barra, el administrador elige de quién son las cuentas
+  que ve (`OwnerSelect`); al cambiar, la página se recarga entera.
+- **Utilidades con tests** (`format`, `payroll`, `reportDetail`, `balances`) concentran la lógica de
+  presentación (formato CLP/fechas, agrupación de nóminas, agrupación por categoría del informe, línea de
+  tiempo del saldo).
 - **`styles.css`** define el diseño; el informe usa `@media print` y `no-print` para que al imprimir
-  salgan las 3 hojas, una por página.
+  salgan las 4 hojas, una por página.
 
 ## 6. Cómo se asegura que todo esté conectado
 
@@ -229,9 +264,18 @@ accounts ──< movements          (una cuenta tiene muchos movimientos)
 imports  ──< movements          (movimiento referencia la importación que lo trajo)
 categories ──< movements        (categoría del movimiento; ON DELETE SET NULL)
 categories ──< rules            (regla asigna categoría)
-users    ──< sessions           (sesión de un usuario)
-users    ──< report_notes       (autor del comentario)
 ```
+
+En `usuarios.db`:
+
+```
+users ──< sessions              (sesión de un usuario)
+users ──< users                 (admin_id: el administrador que gestiona al usuario)
+users ── data_file              (archivo con la base de sus cuentas)
+```
+
+`imports.user_id` y `report_notes.user_id` guardan quién importó o comentó (un id de `usuarios.db`,
+sin clave foránea porque es otra base).
 
 Notas clave de diseño:
 
@@ -241,6 +285,10 @@ Notas clave de diseño:
   **por qué** un movimiento tiene esa categoría/comentario; lo `manual` es intocable por el recálculo.
 - `movements.balance_after` y `credit_used_after` permiten reconstruir el saldo y el uso de la línea
   en cualquier momento; `provisional` marca lo que viene de una cartola en línea de BancoEstado.
+- `accounts.kind` es `cuenta_corriente` o `tarjeta_credito`. Una tarjeta no tiene saldo (sus archivos no
+  traen la deuda): `balance_after` queda vacío y el informe la deja fuera del saldo inicial y final, y
+  suma `cardDebtChange` (compras − pagos) para que el resumen cuadre. `movements.installments` y
+  `installment_amount` describen una compra en cuotas.
 - `report_notes` guarda el comentario por `(scope, from_date, to_date)`: `scope` es `''` para todas las
   cuentas o los ids ordenados separados por coma, y el período es el **período real** del informe.
 
@@ -260,9 +308,11 @@ npm run typecheck   # tsc --noEmit en server y web
 npm test            # Vitest: server (supertest) + web (utilidades y componentes)
 ```
 
-- **Server:** `parser`, `bancoestado`, `classify`, `creditLine`, `importer`, `report` y `api` (esta
-  última ejercita login, CSRF, importación, edición, informe y comentario de punta a punta).
-- **Web:** `format`, `payroll`, `reportDetail`, `theme` y `ReportPage` (tarjeta de comentario). Falta
+- **Server:** `parser`, `bancoestado`, `classify`, `creditLine`, `importer`, `report`, `detect`, `auth`,
+  `api` (login, CSRF, importación, edición, informe y comentario de punta a punta) y `users` (cuentas
+  separadas por usuario, roles, vista del administrador, traspaso y migración de bases anteriores).
+- **Web:** `format`, `payroll`, `reportDetail`, `theme`, `ReportPage` (tarjeta de comentario) y
+  `UsersPage`. Falta
   cobertura del resto de las páginas; ver [AGENTS.md](AGENTS.md).
 
 ## 10. Despliegue y operación
@@ -273,11 +323,17 @@ sirviendo ese `dist`. La base vive en el volumen `/app/data`.
 ```bash
 docker build -t syncbanks .
 docker run -d -p 3001:3001 -v syncbanks-data:/app/data -e DB_KEY=... -e NODE_ENV=production syncbanks
-docker exec -it <contenedor> npm run user:add -- <usuario>
+docker exec -it <contenedor> npm run user:add -- <usuario>   # el primer administrador
 ```
 
+La guía completa (Oracle Cloud *Always Free* + DuckDNS + Caddy) está en [DESPLIEGUE.md](DESPLIEGUE.md):
+`compose.yaml` levanta la app sin puertos propios y Caddy delante, que obtiene y renueva el certificado.
+`TRUST_PROXY=loopback, uniquelocal` hace que Express crea el `X-Forwarded-For` que pone Caddy (llega
+por la red interna de Docker), así el límite de intentos de login es por IP real y no por la del proxy.
+
 En producción debe ir detrás de HTTPS (el proxy reverso termina TLS). El respaldo se hace con
-`npm run backup` (archivo cifrado en `backups/`), que se sube al servidor como `data/syncbanks.db`.
+`npm run backup` (una carpeta con fecha en `backups/` con todas las bases cifradas), cuyo contenido se
+sube a `data/` en el servidor.
 
 ## 11. Anexo — comandos
 
@@ -289,7 +345,8 @@ En producción debe ir detrás de HTTPS (el proxy reverso termina TLS). El respa
 | `npm run typecheck` | `tsc --noEmit` en server y web |
 | `npm run build` | Compila la web en `web/dist` |
 | `npm start` | Levanta el server (sirve `web/dist`) |
-| `npm run import -- a.txt b.xlsx` | Importa cartolas desde la consola |
-| `npm run backup` | Respaldo cifrado en `backups/` |
-| `npm run user:add -- <usuario>` | Crea un usuario |
+| `npm run import -- <usuario> a.txt b.xlsx` | Importa cartolas desde la consola a las cuentas de un usuario |
+| `npm run backup` | Respaldo cifrado de todas las bases en `backups/` |
+| `npm run user:add -- <usuario>` | Crea un administrador |
+| `npm run user:transfer -- <de> <a>` | Pasa todas las cuentas de un usuario a otro sin cuentas |
 | `npm run user:password -- <usuario>` | Contraseña nueva (sin usuario, lista los existentes) |

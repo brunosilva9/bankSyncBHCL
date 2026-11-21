@@ -2,17 +2,17 @@ import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import { createUser } from '../src/auth.js';
-import { ACC_A, ACC_B, cartola, testDb } from './helpers.js';
+import { ACC_A, ACC_B, cartola, cmrFile, testStore } from './helpers.js';
 
-const db = testDb();
-const app = createApp(db, { production: false, sessionDays: 1 });
+const store = testStore();
+const app = createApp(store, { production: false, sessionDays: 1 });
 const H = { 'x-requested-with': 'syncbanks' };
 
 describe('API', () => {
   let cookie: string;
 
   beforeAll(async () => {
-    createUser(db, 'admin', 'una-clave-larga');
+    createUser(store.auth, 'admin', 'una-clave-larga', { role: 'admin' });
     const res = await request(app).post('/api/auth/login').set(H).send({ username: 'admin', password: 'una-clave-larga' });
     cookie = res.headers['set-cookie'][0].split(';')[0];
   });
@@ -124,5 +124,33 @@ describe('API', () => {
       .send(Buffer.from('no soy una cartola'))
       .expect(400);
     expect(res.body.error).toMatch(/largo/);
+  });
+
+  it('borra una cuenta con sus movimientos e importaciones, y deja las demás', async () => {
+    const accounts = (await request(app).get('/api/accounts').set('Cookie', cookie)).body as Array<{ id: number; number: string; name: string }>;
+    const b = accounts.find((a) => a.number === ACC_B)!;
+    const res = await request(app).delete(`/api/accounts/${b.id}`).set(H).set('Cookie', cookie).expect(200);
+    expect(res.body.movements).toBe(4);
+
+    const left = (await request(app).get('/api/accounts').set('Cookie', cookie)).body as Array<{ number: string }>;
+    expect(left.map((a) => a.number)).toEqual([ACC_A]);
+    const movs = (await request(app).get('/api/movements').set('Cookie', cookie)).body as Array<{ account_id: number }>;
+    expect(movs.length).toBeGreaterThan(0);
+    expect(movs.every((m) => m.account_id !== b.id)).toBe(true);
+    const imports = (await request(app).get('/api/imports').set('Cookie', cookie)).body as Array<{ account_name: string }>;
+    expect(imports.length).toBeGreaterThan(0);
+    expect(imports.every((i) => i.account_name !== b.name)).toBe(true);
+    await request(app).delete(`/api/accounts/${b.id}`).set(H).set('Cookie', cookie).expect(404);
+  });
+
+  it('importa la tarjeta CMR como una cuenta sin saldo', async () => {
+    const file = await cmrFile('Ultimos Movimientos', [['2026-10-09', 'COMPRA TIENDA EJEMPLO', 'Titular', 500, 0, 500]]);
+    const res = await request(app).post('/api/imports').set(H).set('Cookie', cookie).set('Content-Type', 'application/octet-stream').send(file).expect(200);
+    expect(res.body).toMatchObject({ type: 'card', accountName: 'Tarjeta CMR (Banco Falabella)', inserted: 1 });
+
+    const accounts = (await request(app).get('/api/accounts').set('Cookie', cookie)).body as Array<{ kind: string; balance: number | null }>;
+    expect(accounts.find((a) => a.kind === 'tarjeta_credito')).toMatchObject({ balance: null });
+    const imports = (await request(app).get('/api/imports').set('Cookie', cookie)).body as Array<{ kind: string }>;
+    expect(imports[0].kind).toBe('card');
   });
 });

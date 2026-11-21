@@ -86,11 +86,18 @@ function AccountForm({ account }: { account: Account }) {
     }
   };
 
+  const remove = async () => {
+    const what = `«${account.name}» (${account.bank} ${account.number_formatted}) con sus ${account.movement_count} movimientos`;
+    if (!confirm(`¿Eliminar la cuenta ${what}? Se pierden también sus categorías, comentarios y notas, y no se puede deshacer. Sus cartolas se pueden volver a importar.`)) return;
+    if (await run(() => api.del(`/api/accounts/${account.id}`))) reload();
+  };
+
   return (
     <div className="account-form">
       <div className="muted small">
-        {account.bank} · {account.number_formatted} · {account.movement_count} movimientos
-        {account.coverage_from && ` · ${shortDate(account.coverage_from)} al ${shortDate(account.coverage_to!)}`} · saldo {clp(account.balance)}
+        {account.bank} · {account.kind === 'tarjeta_credito' ? 'tarjeta de crédito' : account.number_formatted} · {account.movement_count} movimientos
+        {account.coverage_from && ` · ${shortDate(account.coverage_from)} al ${shortDate(account.coverage_to!)}`}
+        {account.kind !== 'tarjeta_credito' && ` · saldo ${clp(account.balance)}`}
       </div>
       <div className="row">
         <label>
@@ -107,10 +114,12 @@ function AccountForm({ account }: { account: Account }) {
         </label>
       </div>
       <div className="row">
-        <label>
-          Cupo línea de crédito
-          <input inputMode="numeric" placeholder="Sin línea" value={form.creditLimit} onChange={(e) => setForm({ ...form, creditLimit: e.target.value })} />
-        </label>
+        {account.kind !== 'tarjeta_credito' && (
+          <label>
+            Cupo línea de crédito
+            <input inputMode="numeric" placeholder="Sin línea" value={form.creditLimit} onChange={(e) => setForm({ ...form, creditLimit: e.target.value })} />
+          </label>
+        )}
         {form.creditLimit && (
           <label>
             Disponible de la línea hoy (según el banco)
@@ -124,6 +133,9 @@ function AccountForm({ account }: { account: Account }) {
         )}
         <button className="primary" onClick={save}>
           {saved ? 'Guardado ✓' : 'Guardar'}
+        </button>
+        <button className="link danger account-remove" onClick={remove}>
+          Eliminar cuenta
         </button>
       </div>
       {form.creditLimit && (

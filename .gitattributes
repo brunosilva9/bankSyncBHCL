@@ -1,0 +1,3 @@
+# Los scripts del servidor deben llegar con saltos de línea de Linux aunque se editen en Windows.
+*.sh text eol=lf
+Caddyfile text eol=lf

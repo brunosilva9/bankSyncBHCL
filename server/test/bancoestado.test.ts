@@ -4,20 +4,25 @@ import type { DB } from '../src/db.js';
 import { recategorize } from '../src/domain/categorize.js';
 import { importCartola } from '../src/domain/importer.js';
 import { buildReport } from '../src/domain/report.js';
-import { parseStatementFile } from '../src/parser/index.js';
+import { backfillFirstSeen } from '../src/domain/seen.js';
+import type { ParsedCartola } from '../src/parser/cartola.js';
+import { parseStatementFile as parseAny } from '../src/parser/index.js';
 import { ACC_A, cartola, testDb } from './helpers.js';
+
+// Estos archivos son cuentas, no tarjetas.
+const parseStatementFile = async (bytes: Uint8Array) => (await parseAny(bytes)) as ParsedCartola;
 
 const BE_ACCOUNT = '99900011122';
 
 type Row = { date: string; op: string; desc: string; out: number; inn: number; balance: number };
 
 /** Arma un Excel con la misma estructura que entrega BancoEstado (datos ficticios). */
-async function bancoEstadoXlsx(kind: 'consolidated' | 'provisional', rows: Row[], summary: Record<string, string>): Promise<Buffer> {
+async function bancoEstadoXlsx(kind: 'consolidated' | 'provisional', rows: Row[], summary: Record<string, string>, downloaded = '11/10/2026-14:59'): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
   const res = wb.addWorksheet('Resumen');
   res.addRow(['600 600 0033 | soporte@bancoestado.cl']);
   res.addRow([]);
-  res.addRow(['Fecha  - Hora       11/10/2026-14:59']);
+  res.addRow([`Fecha  - Hora       ${downloaded}`]);
   res.addRow(['Nombre Empresa', 'TRANSPORTES XY SPA', 'Ejecutivo', 'EJECUTIVO DE PRUEBA']);
   res.addRow(['Rut Empresa', '22.222.222-2', 'Oficina', 'SANTIAGO']);
   for (const [k, v] of Object.entries(summary)) res.addRow([k, v]);
@@ -44,8 +49,8 @@ const consolidated40 = () =>
     { 'N° Cuenta Corriente': BE_ACCOUNT, 'Fecha Inicio': '05/10/2026', 'Fecha Final': '13/10/2026', 'N° Cartola': '040', 'Saldo Inicial': '$100', 'Saldo Final': '$3.100' },
   );
 
-const online = (rows: Row[], balance: number) =>
-  bancoEstadoXlsx('provisional', rows, { 'Cuenta Corriente': `${BE_ACCOUNT} | TRANSPORTES XY SPA`, Inicial: '$3.100', 'Saldo Contable': `$${balance}` });
+const online = (rows: Row[], balance: number, downloaded?: string) =>
+  bancoEstadoXlsx('provisional', rows, { 'Cuenta Corriente': `${BE_ACCOUNT} | TRANSPORTES XY SPA`, Inicial: '$3.100', 'Saldo Contable': `$${balance}` }, downloaded);
 
 const compra = { date: '13/10/2026', op: '6520419', desc: 'COMPRA EN EL COMERCIO', out: 70, inn: 0, balance: 3030 };
 
@@ -57,7 +62,7 @@ describe('BancoEstado', () => {
 
   it('lee la cartola consolidada: cuenta, número, saldo por fila y contrapartes', async () => {
     const p = await parseStatementFile(await consolidated40());
-    expect(p).toMatchObject({ bank: 'BancoEstado', accountNumber: BE_ACCOUNT, balance: 3100, balanceDate: '2026-10-11' });
+    expect(p).toMatchObject({ bank: 'BancoEstado', accountNumber: BE_ACCOUNT, balance: 3100, balanceDate: '2026-10-11', downloadedAt: '2026-10-11 14:59' });
     expect(p.statement).toMatchObject({ kind: 'consolidated', number: '040', fromDate: '2026-10-05', toDate: '2026-10-13' });
     expect(p.company).toEqual({ name: 'TRANSPORTES XY SPA', rut: '22.222.222-2' });
     expect(p.movements.map((m) => [m.date, m.direction, m.amount, m.balance])).toEqual([
@@ -111,6 +116,54 @@ describe('BancoEstado', () => {
     expect(db.prepare('SELECT description, provisional, label FROM movements').all()).toEqual([
       { description: 'Compra nacional comercio ejemplo', provisional: 0, label: 'Repuestos' },
     ]);
+  });
+
+  it('guarda la hora de descarga que anota el banco', async () => {
+    importCartola(db, await parseStatementFile(await consolidated40()), 'c40.xlsx', null);
+    // 14:59 del 11 de octubre, en horario de verano (UTC−3).
+    expect(db.prepare('SELECT observed_at, observed_source FROM imports').get()).toEqual({ observed_at: '2026-10-11T17:59:00.000Z', observed_source: 'banco' });
+  });
+
+  describe('fecha real al consolidar', () => {
+    // Bajada el domingo 18 a las 10:30: una compra del fin de semana que el banco ya fecha el martes 20.
+    const weekend = { date: '20/10/2026', op: '6520419', desc: 'COMPRA EN EL COMERCIO', out: 70, inn: 0, balance: 3030 };
+    const sunday = () => online([weekend], 3030, '18/10/2026-10:30');
+    // La consolidada la trae con otra redacción, otro N° de operación y un día después.
+    const consolidated = () =>
+      bancoEstadoXlsx(
+        'consolidated',
+        [{ ...weekend, date: '21/10/2026', op: '0009999', desc: 'Compra nacional comercio ejemplo' }],
+        { 'N° Cuenta Corriente': BE_ACCOUNT, 'Fecha Inicio': '19/10/2026', 'Fecha Final': '23/10/2026', 'N° Cartola': '042', 'Saldo Final': '$3.030' },
+        '24/10/2026-09:00',
+      );
+    const rows = () => db.prepare('SELECT date, description, first_seen_day, real_date, real_date_source, label FROM movements').all();
+
+    it('se conserva la del día en que apareció, con las ediciones manuales', async () => {
+      importCartola(db, await parseStatementFile(await sunday()), 'linea.xlsx', null);
+      db.prepare("UPDATE movements SET label = 'Repuestos', label_source = 'manual'").run();
+      importCartola(db, await parseStatementFile(await consolidated()), 'c42.xlsx', null);
+      expect(rows()).toEqual([
+        { date: '2026-10-21', description: 'Compra nacional comercio ejemplo', first_seen_day: '2026-10-18', real_date: '2026-10-18', real_date_source: 'observada', label: 'Repuestos' },
+      ]);
+    });
+
+    it('una cartola en línea nueva tampoco la pierde', async () => {
+      importCartola(db, await parseStatementFile(await sunday()), 'linea1.xlsx', null);
+      const monday = { date: '20/10/2026', op: '6520500', desc: 'COMPRA EN EL COMERCIO', out: 30, inn: 0, balance: 3000 };
+      importCartola(db, await parseStatementFile(await online([monday, weekend], 3000, '19/10/2026-09:00')), 'linea2.xlsx', null);
+      expect(db.prepare('SELECT amount, real_date FROM movements ORDER BY amount').all()).toEqual([
+        { amount: 30, real_date: '2026-10-19' },
+        { amount: 70, real_date: '2026-10-18' },
+      ]);
+    });
+
+    it('en una base de antes se recupera por el saldo de la cartola en línea ya reemplazada', async () => {
+      importCartola(db, await parseStatementFile(await sunday()), 'linea.xlsx', null);
+      importCartola(db, await parseStatementFile(await consolidated()), 'c42.xlsx', null);
+      db.exec('UPDATE movements SET first_seen_day = NULL, first_seen_at = NULL, real_date = NULL, real_date_source = NULL');
+      backfillFirstSeen(db);
+      expect(rows()).toEqual([expect.objectContaining({ first_seen_day: '2026-10-18', real_date: '2026-10-18', real_date_source: 'observada' })]);
+    });
   });
 
   it('parea por RUT una transferencia a otra cuenta propia (traspaso interno)', async () => {

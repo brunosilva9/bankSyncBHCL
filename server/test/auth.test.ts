@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { createSession, createUser, listUsers, setPassword, verifyPassword } from '../src/auth.js';
-import { testDb } from './helpers.js';
+import { testStore } from './helpers.js';
 
+const testDb = () => testStore().auth;
 const hashOf = (db: ReturnType<typeof testDb>, username: string) =>
   (db.prepare('SELECT password_hash FROM users WHERE username = ?').get(username) as { password_hash: string }).password_hash;
 
@@ -30,6 +31,9 @@ describe('cambio de contraseña', () => {
     const db = testDb();
     createUser(db, 'zeta', 'una-clave-larga');
     createUser(db, 'alfa', 'una-clave-larga');
-    expect(listUsers(db)).toEqual(['alfa', 'zeta']);
+    expect(listUsers(db)).toEqual([
+      { username: 'alfa', role: 'usuario' },
+      { username: 'zeta', role: 'usuario' },
+    ]);
   });
 });

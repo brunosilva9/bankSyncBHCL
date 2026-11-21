@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { config } from '../config.js';
-import { parseStatementFile } from '../parser/index.js';
+import { isCard, parseStatementFile } from '../parser/index.js';
 
 const [mode, ...dirs] = process.argv.slice(2);
 if (!['guardar', 'comparar'].includes(mode ?? '') || dirs.length === 0) {
@@ -26,6 +26,11 @@ for (const dir of dirs) {
     const key = `${sha(bytes)} ${f}`; // el mismo archivo en dos carpetas cuenta una vez
     try {
       const p = await parseStatementFile(bytes);
+      if (isCard(p)) {
+        const { movements, ...card } = p;
+        now[key] = { ok: true, summary: { ...card, movements: movements.length, movementsHash: sha(JSON.stringify(movements)) } };
+        continue;
+      }
       now[key] = {
         ok: true,
         summary: {

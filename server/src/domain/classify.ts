@@ -5,6 +5,10 @@ export type MovementKind =
   | 'transfer_in'
   | 'payroll' // Pago Fácil Bch: pago de nómina, una línea por trabajador
   | 'card_payment' // "Pago: Comercio"
+  // Tarjeta de crédito (server/src/parser/creditCard.ts)
+  | 'credit_card_purchase'
+  | 'credit_card_payment' // pago de la tarjeta: plata propia que pasa a la tarjeta
+  | 'credit_card_advance' // avance transferido a una cuenta
   | 'credit_line'
   | 'loan_payment'
   | 'bank_fee'

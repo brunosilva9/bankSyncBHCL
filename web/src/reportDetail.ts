@@ -1,13 +1,19 @@
-import type { Category, Movement } from './api';
+import type { Category, DateMode, Movement } from './api';
 import { shortDate } from './format';
 import { groupPayroll, type DisplayRow } from './payroll';
+import { dayOf } from './seen';
 
 /** Con quién fue el movimiento: nombre del trabajador, contraparte o la descripción del banco. */
 export const movementTitle = (m: Movement) => m.payee_name ?? m.counterparty ?? m.description;
 
-/** Orden de lectura de un informe: del más antiguo al más reciente (dentro del día, seq 0 es el último). */
-export function chronological(movements: Movement[]): Movement[] {
-  return [...movements].sort((a, b) => a.date.localeCompare(b.date) || a.account_name.localeCompare(b.account_name) || b.seq - a.seq);
+/**
+ * Orden de lectura de un informe: del más antiguo al más reciente (dentro del día, seq 0 es el último). Por fecha
+ * real, lo que el banco fechó después va al final de su día, en el orden de su fecha del banco.
+ */
+export function chronological(movements: Movement[], dates: DateMode = 'banco'): Movement[] {
+  return [...movements].sort(
+    (a, b) => dayOf(a, dates).localeCompare(dayOf(b, dates)) || a.account_name.localeCompare(b.account_name) || a.date.localeCompare(b.date) || b.seq - a.seq,
+  );
 }
 
 export interface CategoryGroup {
@@ -20,10 +26,13 @@ export interface CategoryGroup {
   rows: DisplayRow[];
 }
 
-/** Gastos agrupados por categoría, de la que suma más a la que suma menos. */
-export function groupByCategory(movements: Movement[], categories: Category[]): CategoryGroup[] {
+/**
+ * Gastos agrupados por categoría: primero lo que no tiene categoría, para asignarla rápido desde el informe; después,
+ * de la que suma más a la que suma menos.
+ */
+export function groupByCategory(movements: Movement[], categories: Category[], dates: DateMode = 'banco'): CategoryGroup[] {
   const groups = new Map<number | null, Movement[]>();
-  for (const m of chronological(movements)) {
+  for (const m of chronological(movements, dates)) {
     if (!groups.has(m.category_id)) groups.set(m.category_id, []);
     groups.get(m.category_id)!.push(m);
   }
@@ -36,10 +45,10 @@ export function groupByCategory(movements: Movement[], categories: Category[]): 
         color: category?.color ?? null,
         total: items.reduce((s, m) => s + m.amount, 0),
         count: items.length,
-        rows: groupPayroll(items),
+        rows: groupPayroll(items, dates),
       };
     })
-    .sort((a, b) => b.total - a.total);
+    .sort((a, b) => Number(a.categoryId !== null) - Number(b.categoryId !== null) || b.total - a.total);
 }
 
 export interface PayrollLine {

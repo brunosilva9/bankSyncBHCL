@@ -1,0 +1,6 @@
+# HTTPS automático para el dominio de .env (p. ej. tu-subdominio.duckdns.org). Caddy redirige
+# http -> https solo. Las cabeceras de seguridad las pone la app (helmet).
+{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy app:3001
+}

@@ -1,6 +1,12 @@
 import { parseBancoEstadoXlsx } from './bancoestado.js';
 import { CartolaParseError, decodeCartola, parseCartola, type ParsedCartola } from './cartola.js';
+import { parseCreditCard, type ParsedCard } from './creditCard.js';
 import { describeDetection, detectStatement, isXls, isXlsx, type Detection } from './detect.js';
+
+export { isCard, type ParsedCard } from './creditCard.js';
+
+/** Una cuenta (cartola con saldo) o una tarjeta de crédito (solo movimientos; ver creditCard.ts). */
+export type ParsedStatement = ParsedCartola | ParsedCard;
 
 const notYet = (d: Detection) =>
   new CartolaParseError(`Reconocí el archivo: ${describeDetection(d)}. Todavía no se puede importar este tipo de cartola.`);
@@ -10,10 +16,11 @@ const notYet = (d: Detection) =>
  * importaba (Banco de Chile .txt, BancoEstado empresa) sigue por el mismo camino; los demás formatos
  * reconocidos (ver detect.ts) responden qué son, aunque aún no se puedan importar.
  */
-export async function parseStatementFile(bytes: Uint8Array): Promise<ParsedCartola> {
+export async function parseStatementFile(bytes: Uint8Array): Promise<ParsedStatement> {
   if (isXlsx(bytes)) {
     const d = await detectStatement(bytes);
     if (d && !d.supported) throw notYet(d);
+    if (d?.product === 'tarjeta_credito') return parseCreditCard(bytes, d);
     try {
       return await parseBancoEstadoXlsx(bytes);
     } catch (e) {

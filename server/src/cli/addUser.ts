@@ -1,8 +1,9 @@
 // Uso: npm run user:add -- <usuario>   (pide la contraseña por consola, o la lee de SYNCBANKS_PASSWORD)
+// Crea un administrador. Los usuarios de cada administrador se crean desde la app, en Usuarios.
 import readline from 'node:readline/promises';
 import { createUser } from '../auth.js';
 import { config } from '../config.js';
-import { openDb } from '../db.js';
+import { openStore } from '../store.js';
 
 const username = process.argv[2];
 if (!username) {
@@ -17,10 +18,10 @@ if (!password) {
   rl.close();
 }
 
-const db = openDb(config.dbPath, config.dbKey);
+const store = openStore(config.dbPath, config.dbKey);
 try {
-  createUser(db, username, password);
-  console.log(`Usuario "${username}" creado.`);
+  createUser(store.auth, username, password, { role: 'admin' });
+  console.log(`Administrador "${username}" creado. Sus usuarios se crean desde la app, en Usuarios.`);
 } catch (e) {
   console.error((e as Error).message);
   process.exit(1);

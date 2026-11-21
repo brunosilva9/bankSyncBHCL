@@ -26,6 +26,10 @@ const KIND_TO_SYSTEM_KEY: Partial<Record<MovementKind, string>> = {
   bank_fee: 'bank_fee',
   credit_line: 'credit_line',
   loan_payment: 'loan',
+  // Pagar la tarjeta o pasar un avance a una cuenta mueve plata propia: no es ingreso ni gasto. Lo que
+  // se gastó son las compras de la tarjeta.
+  credit_card_payment: 'internal',
+  credit_card_advance: 'internal',
 };
 
 export function ruleMatches(rule: Rule, m: Pick<MovementForRules, 'direction' | 'description' | 'counterparty'>): boolean {

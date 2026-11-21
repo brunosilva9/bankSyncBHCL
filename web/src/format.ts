@@ -14,6 +14,35 @@ export function shortDate(iso: string, withWeekday = false): string {
   return `${date.toLocaleDateString('es-CL', { weekday: 'short' }).replace('.', '')} ${base}`;
 }
 
+const CHILE = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Santiago',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** Instante UTC (ISO, o "YYYY-MM-DD HH:MM:SS" de SQLite) en hora de Chile: día YYYY-MM-DD y hora HH:MM. */
+export function inChile(utc: string): { day: string; time: string } {
+  const p = Object.fromEntries(CHILE.formatToParts(new Date(utc.includes('T') ? utc : `${utc.replace(' ', 'T')}Z`)).map((x) => [x.type, x.value]));
+  return { day: `${p.year}-${p.month}-${p.day}`, time: `${p.hour}:${p.minute}` };
+}
+
+/** Suma días de calendario a un día YYYY-MM-DD. */
+export function addDaysIso(iso: string, n: number): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** "20/11/2026 02:00", en hora de Chile. */
+export function chileDateTime(utc: string): string {
+  const { day, time } = inChile(utc);
+  return `${shortDate(day)} ${time}`;
+}
+
 export const toIso = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 

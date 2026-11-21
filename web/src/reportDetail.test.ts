@@ -16,7 +16,7 @@ describe('detalle del informe', () => {
     expect(ordered.map((m) => m.id)).toEqual([2, 3, 1]);
   });
 
-  it('agrupa por categoría con subtotal, de mayor a menor, y junta cada nómina en una fila', () => {
+  it('agrupa por categoría con subtotal: primero lo sin categoría, después de mayor a menor, y junta cada nómina en una fila', () => {
     const groups = groupByCategory(
       [
         mov(1, '2026-10-13', 0, 100, 2),
@@ -26,10 +26,11 @@ describe('detalle del informe', () => {
       ],
       cats,
     );
+    // Lo sin categoría suma menos, pero va primero: es lo que falta asignar.
     expect(groups.map((g) => [g.name, g.total, g.count, g.rows.length])).toEqual([
+      ['Sin categoría', 50, 1, 1],
       ['Sueldos y nómina', 500, 2, 1],
       ['Combustible', 100, 1, 1],
-      ['Sin categoría', 50, 1, 1],
     ]);
   });
 

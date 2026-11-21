@@ -11,10 +11,12 @@
     "typecheck": "npm --prefix server run typecheck && npx --prefix web tsc --noEmit -p web",
     "user:add": "npm --prefix server run user:add --",
     "user:password": "npm --prefix server run user:password --",
+    "user:transfer": "npm --prefix server run user:transfer --",
     "detect": "npm --prefix server run detect --",
     "check:real": "npm --prefix server run check:real --",
     "import": "npm --prefix server run import --",
-    "backup": "npm --prefix server run backup --"
+    "backup": "npm --prefix server run backup --",
+    "cierre": "npm --prefix server run cierre --"
   },
   "devDependencies": {
     "concurrently": "^10.0.6"

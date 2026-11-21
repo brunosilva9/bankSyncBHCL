@@ -1,12 +1,15 @@
 import { useMemo, useState } from 'react';
-import { api, qs, type Movement } from '../api';
+import { api, fechaParam, qs, type Movement } from '../api';
 import { CategorySelect } from '../components/CategorySelect';
+import { DatesSelect } from '../components/DatesSelect';
 import { LabelInput } from '../components/LabelInput';
 import { RangePicker } from '../components/RangePicker';
 import { useFetch, useShared } from '../data';
 import { clp, presetRange, shortDate, type DateRange } from '../format';
+import { MovedBadge } from '../components/MovedBadge';
 import { groupPayroll } from '../payroll';
 import { navigate } from '../router';
+import { dayOf } from '../seen';
 
 type Edit = { categoryId?: number | null | 'auto'; label?: string | null };
 
@@ -20,12 +23,12 @@ interface Suggestion {
 const counterpartyName = (m: Movement) => m.payee_name ?? m.counterparty;
 
 export function MovementsPage({ params }: { params: Record<string, string> }) {
-  const { accounts, categories, reload: reloadShared } = useShared();
+  const { accounts, categories, reload: reloadShared, dates } = useShared();
   const range: DateRange = params.from && params.to ? { from: params.from, to: params.to } : presetRange('last30');
   const filters = { ...params, ...range };
   const setFilter = (patch: Record<string, string | number | undefined>) => navigate('/movimientos', { ...filters, ...patch }, true);
 
-  const { data, error, loading, refresh, setData } = useFetch<Movement[]>(`/api/movements${qs(filters)}`);
+  const { data, error, loading, refresh, setData } = useFetch<Movement[]>(`/api/movements${qs({ ...filters, fecha: fechaParam(dates) })}`);
   const [groupBatches, setGroupBatches] = useState(true);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -33,7 +36,7 @@ export function MovementsPage({ params }: { params: Record<string, string> }) {
   const [search, setSearch] = useState(params.q ?? '');
 
   const movements = data ?? [];
-  const rows = useMemo(() => (groupBatches ? groupPayroll(movements) : movements.map((m) => ({ type: 'single' as const, m }))), [movements, groupBatches]);
+  const rows = useMemo(() => (groupBatches ? groupPayroll(movements, dates) : movements.map((m) => ({ type: 'single' as const, m }))), [movements, groupBatches, dates]);
   const totals = useMemo(
     () => ({
       out: movements.filter((m) => m.direction === 'C').reduce((s, m) => s + m.amount, 0),
@@ -100,6 +103,7 @@ export function MovementsPage({ params }: { params: Record<string, string> }) {
     <div className="page">
       <div className="toolbar">
         <RangePicker value={range} onChange={(r) => setFilter({ ...r })} />
+        <DatesSelect />
       </div>
       <div className="toolbar filters">
         <select value={params.accountId ?? ''} onChange={(e) => setFilter({ accountId: e.target.value || undefined })}>
@@ -139,6 +143,13 @@ export function MovementsPage({ params }: { params: Record<string, string> }) {
         <label className="check">
           <input type="checkbox" checked={groupBatches} onChange={(e) => setGroupBatches(e.target.checked)} />
           Agrupar nómina
+        </label>
+        <label
+          className="check"
+          title="Los que ya aparecían en la cartola de un día anterior a su fecha: el banco pasa al día hábil siguiente lo que se hace de noche, en fin de semana o en feriado"
+        >
+          <input type="checkbox" checked={params.postdated === '1'} onChange={(e) => setFilter({ postdated: e.target.checked ? 1 : undefined })} />
+          Solo los que el banco fechó después
         </label>
         {(params.label || params.kind || params.categoryKey) && (
           <button className="chip active" onClick={() => setFilter({ label: undefined, kind: undefined, batch: undefined, categoryKey: undefined })}>
@@ -245,9 +256,19 @@ function Description({ m }: { m: Movement }) {
       ) : (
         <span>{m.description}</span>
       )}
+      {m.installment_amount !== null && (
+        <small className="muted">{m.installments ? `${m.installments} cuotas de ${clp(m.installment_amount)}` : `en cuotas de ${clp(m.installment_amount)}`}</small>
+      )}
       {m.note && <small className="note">{m.note}</small>}
       {m.provisional === 1 && (
-        <small className="badge" title="De la cartola en línea: se reemplaza al importar la próxima cartola consolidada">
+        <small
+          className="badge"
+          title={
+            m.kind.startsWith('credit_card') || m.kind === 'bank_fee'
+              ? 'Por facturar: se confirma al importar el estado de cuenta facturado'
+              : 'De la cartola en línea: se reemplaza al importar la próxima cartola consolidada'
+          }
+        >
           provisorio
         </small>
       )}
@@ -256,12 +277,16 @@ function Description({ m }: { m: Movement }) {
 }
 
 function MovementRow({ m, selected, onSelect, onEdit, nested }: { m: Movement; selected: boolean; onSelect: (on: boolean) => void; onEdit: (e: Edit) => void; nested?: boolean }) {
+  const { dates } = useShared();
   return (
     <tr className={`${m.system_key === 'internal' ? 'internal' : ''} ${nested ? 'nested' : ''}`}>
       <td>
         <input type="checkbox" checked={selected} onChange={(e) => onSelect(e.target.checked)} aria-label="Seleccionar" />
       </td>
-      <td className="nowrap">{shortDate(m.date)}</td>
+      <td className="nowrap">
+        {shortDate(dayOf(m, dates))}
+        <MovedBadge items={[m]} />
+      </td>
       <td className="nowrap small">{m.account_name}</td>
       <Description m={m} />
       <td className="num neg">{m.direction === 'C' ? clp(m.amount) : ''}</td>
@@ -288,6 +313,7 @@ function BatchRows(props: {
   onEditOne: (m: Movement, e: Edit) => void;
 }) {
   const { items, open } = props;
+  const { dates } = useShared();
   const first = items[0];
   const total = items.reduce((s, m) => s + m.amount, 0);
   const ids = items.map((m) => m.id);
@@ -300,7 +326,10 @@ function BatchRows(props: {
         <td>
           <input type="checkbox" checked={allSelected} onChange={(e) => props.onSelect(ids, e.target.checked)} aria-label="Seleccionar nómina" />
         </td>
-        <td className="nowrap">{shortDate(first.date)}</td>
+        <td className="nowrap">
+          {shortDate(dayOf(first, dates))}
+          <MovedBadge items={items} />
+        </td>
         <td className="nowrap small">{first.account_name}</td>
         <td className="desc">
           <button className="link" onClick={props.onToggle}>

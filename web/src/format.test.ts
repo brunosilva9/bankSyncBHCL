@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { clp, clpSigned, presetRange, shortDate } from './format';
+import { addDaysIso, chileDateTime, clp, clpSigned, inChile, presetRange, shortDate } from './format';
 
 describe('formato de montos', () => {
   it('formatea pesos chilenos sin decimales', () => {
@@ -32,5 +32,20 @@ describe('fechas', () => {
 
   it('mes pasado cubre el mes completo', () => {
     expect(presetRange('lastMonth', new Date(2026, 9, 11))).toEqual({ from: '2026-09-01', to: '2026-09-30' });
+  });
+});
+
+describe('hora de Chile', () => {
+  it('lee instantes UTC en ISO y en el formato de SQLite', () => {
+    // 02:00 del 15 en Chile (verano, UTC−3).
+    expect(inChile('2026-11-15T05:00:00.000Z')).toEqual({ day: '2026-11-15', time: '02:00' });
+    expect(inChile('2026-11-15 05:00:00')).toEqual({ day: '2026-11-15', time: '02:00' });
+    // 01:30 UTC del 15 todavía es el 14 en Chile.
+    expect(chileDateTime('2026-11-15 01:30:00')).toBe('14/11/2026 22:30');
+  });
+
+  it('suma días de calendario', () => {
+    expect(addDaysIso('2026-12-31', 1)).toBe('2027-01-01');
+    expect(addDaysIso('2026-03-01', -1)).toBe('2026-02-28');
   });
 });

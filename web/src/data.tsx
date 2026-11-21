@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
-import { api, type Account, type Category } from './api';
+import { api, type Account, type Category, type DateMode } from './api';
 
 // Datos de referencia que usan todas las páginas.
 interface SharedData {
@@ -7,7 +7,19 @@ interface SharedData {
   categories: Category[];
   labels: string[];
   reload: () => Promise<void>;
+  /** Por qué fecha se muestra todo: la real (por defecto) o la del banco. Se recuerda en este navegador. */
+  dates: DateMode;
+  setDates: (d: DateMode) => void;
 }
+
+const DATES_KEY = 'syncbanks.fechas';
+const savedDates = (): DateMode => {
+  try {
+    return localStorage.getItem(DATES_KEY) === 'banco' ? 'banco' : 'real';
+  } catch {
+    return 'real';
+  }
+};
 
 /** Un solo <datalist> con los comentarios existentes, compartido por todos los campos de comentario. */
 export const LABELS_LIST_ID = 'labels-list';
@@ -18,6 +30,15 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [labels, setLabels] = useState<string[]>([]);
+  const [dates, setDatesState] = useState<DateMode>(savedDates);
+  const setDates = useCallback((d: DateMode) => {
+    setDatesState(d);
+    try {
+      localStorage.setItem(DATES_KEY, d);
+    } catch {
+      // Sin almacenamiento (ventana privada): vale para esta visita.
+    }
+  }, []);
 
   const reload = useCallback(async () => {
     const [a, c, l] = await Promise.all([
@@ -35,7 +56,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [reload]);
 
   return (
-    <Ctx.Provider value={{ accounts, categories, labels, reload }}>
+    <Ctx.Provider value={{ accounts, categories, labels, reload, dates, setDates }}>
       {children}
       <datalist id={LABELS_LIST_ID}>
         {labels.map((l) => (

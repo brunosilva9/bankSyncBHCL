@@ -12,8 +12,9 @@ COPY server/package*.json ./
 RUN npm ci
 COPY server/ ./
 COPY --from=web /app/web/dist /app/web/dist
-RUN mkdir -p /app/data && chown node:node /app/data
-VOLUME /app/data
+# data/: bases cifradas. backups/: lo que deja "npm run backup" (path.dirname(DB_PATH)/../backups).
+RUN mkdir -p /app/data /app/backups && chown node:node /app/data /app/backups
+VOLUME /app/data /app/backups
 EXPOSE 3001
 USER node
 CMD ["npx", "tsx", "src/index.ts"]

@@ -8,12 +8,14 @@
     "start": "tsx --env-file-if-exists=../.env src/index.ts",
     "user:add": "tsx --env-file-if-exists=../.env src/cli/addUser.ts",
     "user:password": "tsx --env-file-if-exists=../.env src/cli/setPassword.ts",
+    "user:transfer": "tsx --env-file-if-exists=../.env src/cli/transferData.ts",
     "detect": "tsx src/cli/detect.ts",
     "check:real": "tsx --env-file-if-exists=../.env src/cli/realFilesCheck.ts",
     "import": "tsx --env-file-if-exists=../.env src/cli/importFiles.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "backup": "tsx --env-file-if-exists=../.env src/cli/backup.ts"
+    "backup": "tsx --env-file-if-exists=../.env src/cli/backup.ts",
+    "cierre": "tsx --env-file-if-exists=../.env src/cli/closeDays.ts"
   },
   "dependencies": {
     "better-sqlite3-multiple-ciphers": "^13.0.3",
