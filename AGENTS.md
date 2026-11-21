@@ -143,7 +143,7 @@ Automatización (informes diarios, cierres, fecha real, ingesta): diseño y razo
 la primera casilla libre es la siguiente tarea.
 
 - [ ] **Fase 0 — Base para automatizar** (plan §4 y §5).
-  - [ ] `npm audit fix` en `server/` (body-parser 2.0.0–2.3.0, alta; qs, moderada) y Dependabot.
+  - [ ] Dependabot (o el aviso de `npm audit` en la CI): el `npm audit fix` de body-parser y qs ya se hizo.
   - [ ] CI con GitHub Actions: `npm run typecheck`, `npm test` y `npm audit --omit=dev` en cada push.
   - [ ] Hora de descarga de las tarjetas (`parser/creditCard.ts`: la de BancoEstado ya se lee para
         `asOf`, pero sin la hora; CMR no la trae). Las cuentas ya la guardan (ver *Hecho*: fecha real).
