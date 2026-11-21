@@ -9,7 +9,7 @@ import { openDb, type DB } from '../src/db.js';
 import { buildDays, dayDetail } from '../src/domain/daily.js';
 import { importCartola, type SeenOptions } from '../src/domain/importer.js';
 import { buildReport, type DateMode } from '../src/domain/report.js';
-import { observedOf } from '../src/domain/seen.js';
+import { observedOf, realDateWindows, type Placeable } from '../src/domain/seen.js';
 import { parseCartola } from '../src/parser/cartola.js';
 import { chileInstant } from '../src/time.js';
 import { ACC_A, cartola, testDb, testStore } from './helpers.js';
@@ -168,6 +168,59 @@ describe('fecha real: el día en que se vio por primera vez', () => {
   });
 });
 
+describe('fecha real a mano: entre qué días pudo pasar', () => {
+  // Las mismas cartolas, bajadas el viernes a las 22:00, el sábado a las 10:00 y el lunes a las 07:00.
+  const at = (local: string) => chileInstant(local)!;
+  const downloaded = (local: string): SeenOptions => ({ fileModified: at(local), now: LATER.now });
+  const byDescription = (db: DB) => {
+    const rows = db
+      .prepare('SELECT account_id, description, date, real_date, real_date_source, first_seen_day, first_seen_at FROM movements')
+      .all() as Array<Placeable & { description: string }>;
+    const windows = realDateWindows(db, rows);
+    return Object.fromEntries(rows.map((r, k) => [r.description, { ...r, window: windows[k] }]));
+  };
+  let db: DB;
+  beforeEach(() => {
+    db = testDb();
+    load(db, friday, 'vie.txt', downloaded('2026-11-13 22:00'));
+    load(db, saturday, 'sab.txt', downloaded('2026-11-14 10:00'));
+    load(db, monday, 'lun.txt', downloaded('2026-11-16 07:00'));
+  });
+
+  it('lo que apareció el lunes pudo pasar el sábado después de la descarga anterior, el domingo o el lunes', () => {
+    expect(byDescription(db)['Pago: Proveedor Lunes'].window).toEqual({
+      min: '2026-11-14',
+      max: '2026-11-16',
+      before: { day: '2026-11-14', at: '2026-11-14T13:00:00.000Z' },
+    });
+  });
+
+  it('lo que ya estaba el sábado, el viernes después de las 22:00 o el sábado; sin descarga anterior, desde el día hábil anterior', () => {
+    const m = byDescription(db);
+    expect(m['Traspaso A: Proveedor Sabado'].window).toEqual({
+      min: '2026-11-13',
+      max: '2026-11-14',
+      before: { day: '2026-11-13', at: '2026-11-14T01:00:00.000Z' },
+    });
+    expect(m['Traspaso De: Cliente Uno'].window).toEqual({ min: '2026-11-12', max: '2026-11-13', before: null });
+  });
+
+  it('una fecha manual se mantiene, salvo que una cartola muestre que ya existía antes', () => {
+    db.prepare("UPDATE movements SET real_date = '2026-11-15', real_date_source = 'manual' WHERE description = 'Pago: Proveedor Lunes'").run();
+    load(db, monday, 'lun-otra-vez.txt', downloaded('2026-11-16 09:00'));
+    expect(byDescription(db)['Pago: Proveedor Lunes']).toMatchObject({ real_date: '2026-11-15', real_date_source: 'manual' });
+
+    // Una descarga del sábado a las 20:00, subida después, ya lo traía: no pudo pasar el domingo, y ya no hay qué elegir.
+    const saturdayNight = cartola(ACC_A, '2026-11-14', 700, [
+      { date: '2026-11-16', amount: 100, type: 'C', desc: 'Pago: Proveedor Lunes' },
+      { date: '2026-11-16', amount: 200, type: 'C', desc: 'Traspaso A: Proveedor Sabado' },
+      { date: '2026-11-13', amount: 1000, type: 'A', desc: 'Traspaso De: Cliente Uno' },
+    ]);
+    load(db, saturdayNight, 'sab-noche.txt', downloaded('2026-11-14 20:00'));
+    expect(byDescription(db)['Pago: Proveedor Lunes']).toMatchObject({ real_date: '2026-11-14', real_date_source: 'observada', window: null });
+  });
+});
+
 describe('API', () => {
   const store = testStore();
   const app = createApp(store, { production: false, sessionDays: 1 });
@@ -197,5 +250,52 @@ describe('API', () => {
     const moved = (await request(app).get('/api/movements?postdated=1&from=2026-11-01&to=2026-11-30').set('Cookie', cookie).expect(200)).body;
     expect(all).toHaveLength(3);
     expect(moved.map((m: { description: string }) => m.description)).toEqual(['Traspaso A: Proveedor Sabado']);
+  });
+});
+
+describe('fecha real a mano: API', () => {
+  const store = testStore();
+  const app = createApp(store, { production: false, sessionDays: 1 });
+  const H = { 'x-requested-with': 'syncbanks' };
+  let cookie: string;
+  type Row = { id: number; description: string; real_date: string; real_date_source: string; real_date_window: unknown };
+  const find = async (description: string) =>
+    ((await request(app).get('/api/movements?from=2026-11-01&to=2026-11-30').set('Cookie', cookie).expect(200)).body as Row[]).find((m) => m.description === description)!;
+  const patch = (id: number, body: object) => request(app).patch(`/api/movements/${id}`).set(H).set('Cookie', cookie).send(body);
+
+  beforeAll(async () => {
+    createUser(store.auth, 'admin', 'una-clave-larga', { role: 'admin' });
+    const res = await request(app).post('/api/auth/login').set(H).send({ username: 'admin', password: 'una-clave-larga' });
+    cookie = res.headers['set-cookie'][0].split(';')[0];
+    const files: Array<[string, string, string]> = [
+      [friday, 'vie.txt', '2026-11-13 22:00'],
+      [saturday, 'sab.txt', '2026-11-14 10:00'],
+      [monday, 'lun.txt', '2026-11-16 07:00'],
+    ];
+    for (const [text, name, local] of files) {
+      await request(app)
+        .post('/api/imports')
+        .set(H)
+        .set('Cookie', cookie)
+        .set('Content-Type', 'application/octet-stream')
+        .set('x-filename', name)
+        .set('x-file-modified', String(chileInstant(local)))
+        .send(Buffer.from(text, 'latin1'))
+        .expect(200);
+    }
+  });
+
+  it('cada movimiento trae entre qué días pudo pasar; se elige uno y queda como fecha real manual', async () => {
+    const monday = await find('Pago: Proveedor Lunes');
+    expect(monday.real_date_window).toEqual({ min: '2026-11-14', max: '2026-11-16', before: { day: '2026-11-14', at: '2026-11-14T13:00:00.000Z' } });
+    await patch(monday.id, { realDate: '2026-11-15' }).expect(200);
+    expect(await find('Pago: Proveedor Lunes')).toMatchObject({ real_date: '2026-11-15', real_date_source: 'manual' });
+  });
+
+  it('fuera de esos días, no', async () => {
+    const monday = await find('Pago: Proveedor Lunes');
+    expect((await patch(monday.id, { realDate: '2026-11-13' }).expect(400)).body.error).toBe('La fecha real tiene que ser entre el 14/11 y el 16/11');
+    await patch(monday.id, { realDate: 'ayer' }).expect(400);
+    expect(await find('Pago: Proveedor Lunes')).toMatchObject({ real_date: '2026-11-15', real_date_source: 'manual' });
   });
 });

@@ -195,6 +195,12 @@ El `.txt` y el `.xls` traen solo la fecha contable, sin hora. Lo que se hace des
 
   Conviene subir la cartola recién bajada, el mismo día.
 - La fecha real es una cota: la app sabe que algo pasó antes de la cartola que lo trajo, no cuándo. Si después de la del viernes en la noche la siguiente se baja el domingo en la noche, todo lo de entre medio queda como del domingo. Si se baja recién el lunes temprano, queda como del lunes y sin insignia, porque la fecha del banco y el día en que apareció coinciden: se ve igual que lo hecho el lunes. Con una descarga cada noche, fines de semana incluidos, el error es de horas.
+- **Corregirla a mano:** en *Movimientos*, con *Fechas: Reales*, la fecha de cada movimiento es un selector con los días en que pudo pasar.
+  - Lo más temprano es el día hábil anterior a la fecha del banco: para un martes, el lunes; para un lunes, el viernes, el sábado o el domingo. Los feriados no se conocen, así que cuentan como días hábiles.
+  - Las cartolas lo acotan. No pudo pasar antes de la última descarga de esa cuenta en que todavía no aparecía: ese mismo día sí, más tarde. Tampoco después de la primera que ya lo traía. Si ya estaba en la del sábado, es del sábado o de antes. Si apareció recién el lunes temprano y la descarga anterior fue el sábado, pudo ser el sábado (después de esa descarga), el domingo o el lunes.
+  - Al pasar el mouse sobre la fecha se ve entre qué cartolas quedó, con sus horas. Si hay un solo día posible, la fecha va sin selector.
+  - Una nómina cambia de día entera. En un traspaso entre cuentas propias, cada lado se corrige en su cuenta.
+  - Lo elegido se mantiene al subir más cartolas, salvo que una muestre que el movimiento ya existía antes: entonces vale esa.
 - Las bases anteriores a esta función se completan solas al abrir la app, a partir de las cartolas ya cargadas.
 
 ## Usuarios y roles

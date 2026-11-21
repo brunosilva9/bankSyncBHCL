@@ -1444,6 +1444,24 @@ table.movements select.category {
   max-width: 190px;
   border-left-width: 4px;
 }
+/* La fecha real, para elegir otro de los días en que pudo pasar: se ve como texto con su flecha y el borde aparece al
+   pasar el mouse o al enfocarla. */
+table.movements select.real-date {
+  margin-left: -0.35rem;
+  padding: 0 0.15rem;
+  border-color: transparent;
+  background: transparent;
+  cursor: pointer;
+}
+table.movements select.real-date:hover,
+table.movements select.real-date:focus-visible {
+  border-color: var(--border);
+  background: var(--surface);
+}
+table.movements select.real-date option {
+  background: var(--surface);
+  color: var(--text);
+}
 table.movements select.category.auto,
 table.movements select.category.rule {
   border-style: dashed;

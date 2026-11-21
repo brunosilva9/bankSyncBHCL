@@ -75,7 +75,8 @@ web/src/
   api.ts            # cliente HTTP y tipos de la API
   App.tsx, router.ts, data.tsx
   pages/            # LoginPage, ImportPage, MovementsPage, PayrollPage, ReportPage, DailyPage, SettingsPage, UsersPage
-  components/       # BalanceChart, CategorySelect, CopyButton, CopyImageButton, DatesSelect, LabelInput, MovedBadge, RangePicker
+  components/       # BalanceChart, CategorySelect, CopyButton, CopyImageButton, DatesSelect, LabelInput, MovedBadge,
+                    # RangePicker, RealDateSelect
   clipboard.ts      # copiar texto y tabla HTML (con respaldo por execCommand sin HTTPS) o una imagen al portapapeles
   format.ts, payroll.ts, reportDetail.ts, dailyCopy.ts, seen.ts, balances.ts, chartImage.ts, ledgerImage.ts (+ sus .test.ts)
 ```
@@ -195,8 +196,9 @@ la primera casilla libre es la siguiente tarea.
       *Hecho*: fecha real por el día en que apareció); falta:
   - [ ] *Tardío* (llegó después del cierre de su día): marcarlo contra ese cierre. Va con las
         correcciones de la fase 3.
-  - [ ] Fecha real a mano en `PATCH /api/movements/:id` (`real_date_source = 'manual'`; `seenStatements`
-        ya no la pisa).
+  - [ ] Feriados de Chile en la ventana de la fecha real a mano (`previousBusinessDay` en `domain/seen.ts`): hoy
+        solo se saltan sábados y domingos, así que el día siguiente a un feriado no deja elegir el día hábil anterior
+        al feriado.
   - [ ] Confirmar con el experimento de la fase 1 que el saldo de una cartola nocturna siempre incluye lo
         fechado al día siguiente (con las cartolas ya cargadas, casi siempre calza): de eso depende que el
         saldo por fecha real cuadre con la cartola.
@@ -237,6 +239,18 @@ la primera casilla libre es la siguiente tarea.
       comentario); faltan los de las demás páginas.
 
 ### Hecho
+
+- **Fecha real a mano** (fase 2). En *Movimientos*, por fecha real, la fecha es un selector
+      (`web/src/components/RealDateSelect.tsx`) con los días en que pudo pasar el movimiento.
+      - `realDateWindows` en `domain/seen.ts` calcula esos días. Lo más temprano es el día hábil anterior a la
+        fecha del banco, o el día de la última descarga de su cuenta en que todavía no aparecía, si es posterior.
+        Lo más tardío es la primera cartola que lo trajo, o la fecha del banco si es anterior.
+      - No cuentan las consolidadas de BancoEstado (traen solo su período) ni las tarjetas.
+      - `GET /api/movements` lo manda en `real_date_window`. `PATCH /api/movements/:id` y `/bulk` aceptan `realDate`
+        dentro de esa ventana y la dejan `manual`. Una nómina cambia entera.
+      - `seenStatements` ya no se salta las fechas manuales: igual solo baja la fecha, así que cambia una manual solo
+        si una cartola muestra que el movimiento ya existía antes.
+      - Tests: `server/test/seen.test.ts`, `web/src/seen.test.ts` y `web/src/components/RealDateSelect.test.tsx`.
 
 - **Hoja *Saldos* del informe** (la segunda): el saldo consolidado (total de las cuentas) al final de cada día,
       en un gráfico, una lista día a día y el detalle día a día. El usuario no quiso gráficos ni tabla de saldos por

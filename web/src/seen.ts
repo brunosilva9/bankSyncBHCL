@@ -1,5 +1,5 @@
-import type { DateMode, RealDateSource } from './api';
-import { inChile, shortDate } from './format';
+import type { DateMode, RealDateSource, RealDateWindow } from './api';
+import { addDaysIso, inChile, shortDate } from './format';
 
 // Movimientos que el banco fechó después de su fecha real: lo que se hace de noche, en fin de semana o en feriado
 // pasa al día hábil siguiente, aunque ya aparezca en la cartola de ese mismo día. La fecha real es la del día en
@@ -64,4 +64,36 @@ export function movedBadgeText(m: Dated, dates: DateMode): string | null {
   const real = movedFrom(m);
   if (!real) return null;
   return dates === 'real' ? `banco: ${weekdayDay(m.date)}` : `↶ ${weekdayDay(real)}`;
+}
+
+/** Un movimiento con los días en que pudo pasar (de GET /api/movements). */
+export type Placeable = Dated & { first_seen_day: string | null; real_date_window?: RealDateWindow | null };
+
+/** Los días que se pueden elegir como fecha real: los de su ventana y, si quedó fuera, la que tiene. */
+export function realDateOptions(m: Placeable): string[] {
+  const w = m.real_date_window;
+  if (!w) return [];
+  const days: string[] = [];
+  for (let d = w.min; d <= w.max; d = addDaysIso(d, 1)) days.push(d);
+  const current = m.real_date ?? m.date;
+  return days.includes(current) ? days : [...days, current].sort();
+}
+
+/** Por qué se puede elegir entre esos días, para el detalle del selector. */
+export function realDateTitle(m: Placeable): string {
+  const w = m.real_date_window;
+  if (!w) return '';
+  const parts = [`Fecha real: el día en que pasó. El banco lo fechó el ${shortDate(m.date, true)}.`];
+  if (w.before) {
+    const time = w.before.at ? inChile(w.before.at) : null;
+    parts.push(`No aparecía en la cartola del ${shortDate(w.before.day, true)}${time?.day === w.before.day ? ` de las ${time.time}` : ''}: pasó después.`);
+  } else {
+    parts.push('Lo más temprano es el día hábil anterior: el banco pasa al siguiente lo que se hace de noche, en fin de semana o en feriado.');
+  }
+  if (m.first_seen_day && m.first_seen_day <= w.max) {
+    const time = seenTime(m, m.first_seen_day);
+    parts.push(`Ya aparecía en la del ${shortDate(m.first_seen_day, true)}${time ? ` de las ${time}` : ''}.`);
+  }
+  if (m.real_date_source === 'manual') parts.push('Corregida a mano.');
+  return parts.join(' ');
 }

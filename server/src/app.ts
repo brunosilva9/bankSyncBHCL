@@ -23,6 +23,7 @@ import { checkBalances, importCartola, recomputePayrollBatches } from './domain/
 import { buildReport, dayColumn, type DateMode } from './domain/report.js';
 import { closingStatuses, getClosing, lastClosableDay, verifyClosings } from './domain/closing.js';
 import { buildDays, dailyBalances, dayDetail } from './domain/daily.js';
+import { realDateWindows, type Placeable } from './domain/seen.js';
 import { CartolaParseError, displayAccountNumber } from './parser/cartola.js';
 import { isCard, parseStatementFile } from './parser/index.js';
 import { daysBetween } from './time.js';
@@ -418,7 +419,10 @@ function dataRoutes(db: DB, { usernameOf, accountElsewhere, closingHour }: DataC
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
       ORDER BY ${DAY} DESC, a.name, m.date DESC, m.seq ASC
       LIMIT ?`;
-    res.json(db.prepare(sql).all(...args, limit));
+    const rows = db.prepare(sql).all(...args, limit) as Array<Placeable & Record<string, unknown>>;
+    // Entre qué días pudo pasar cada uno: los que se pueden elegir como fecha real (ver domain/seen.ts).
+    const windows = realDateWindows(db, rows);
+    res.json(rows.map((r, k) => ({ ...r, real_date_window: windows[k] })));
   });
 
   function applyEdit(id: number, body: Record<string, unknown>) {
@@ -436,6 +440,22 @@ function dataRoutes(db: DB, { usernameOf, accountElsewhere, closingHour }: DataC
     if ('note' in body) {
       const note = str(body.note, 'nota', { optional: true, max: 500 }) ?? null;
       db.prepare('UPDATE movements SET note = ? WHERE id = ?').run(note, id);
+    }
+    // Fecha real a mano: uno de los días en que pudo pasar. Queda 'manual'; lo automático solo la cambia si una cartola
+    // muestra que el movimiento ya existía antes.
+    if ('realDate' in body) {
+      const day = body.realDate;
+      if (typeof day !== 'string' || !DATE.test(day)) throw bad('Fecha real inválida');
+      const m = db.prepare('SELECT account_id, date, real_date, real_date_source, first_seen_day, first_seen_at FROM movements WHERE id = ?').get(id) as
+        | Placeable
+        | undefined;
+      if (!m) throw new HttpError(404, 'Movimiento no encontrado');
+      const w = realDateWindows(db, [m])[0];
+      const dm = (d: string) => `${d.slice(8)}/${d.slice(5, 7)}`;
+      if (day !== (m.real_date ?? m.date) && (!w || day < w.min || day > w.max)) {
+        throw bad(w ? `La fecha real tiene que ser entre el ${dm(w.min)} y el ${dm(w.max)}` : 'Este movimiento no pudo pasar otro día');
+      }
+      db.prepare("UPDATE movements SET real_date = ?, real_date_source = 'manual' WHERE id = ?").run(day, id);
     }
   }
 

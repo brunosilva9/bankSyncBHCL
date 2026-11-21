@@ -6,8 +6,9 @@
 // o la fecha (ver carryOver en importer.ts).
 //
 // movements.real_date_source dice de dónde salió: 'banco' (es la fecha que dio el banco), 'observada' (el día en
-// que ya estaba en una cartola, anterior a la fecha del banco). 'manual' queda para cuando se pueda corregir a
-// mano: lo automático nunca la pisa.
+// que ya estaba en una cartola, anterior a la fecha del banco) o 'manual' (la eligió el usuario en Movimientos, dentro
+// de los días en que pudo pasar: ver realDateWindows). Lo automático solo la baja, así que no cambia una fecha
+// manual, salvo que una cartola muestre que el movimiento ya existía antes: entonces esa fecha manual no pudo ser.
 import type { DB } from '../db.js';
 import { addDays, chileDay, chileInstant } from '../time.js';
 
@@ -45,10 +46,11 @@ export function seenStatements(db: DB) {
     UPDATE movements SET first_seen_day = @day, first_seen_at = @at
     WHERE id = @id AND (first_seen_day IS NULL OR first_seen_day > @day
       OR (first_seen_day = @day AND @at IS NOT NULL AND (first_seen_at IS NULL OR first_seen_at > @at)))`);
-  // Parámetros: { id, day, source }. Sin fecha real todavía, se compara con la del banco.
+  // Parámetros: { id, day, source }. Sin fecha real todavía, se compara con la del banco. También baja una fecha
+  // manual: si ya existía antes de esa fecha, no pudo pasar ese día.
   const realDate = db.prepare(`
     UPDATE movements SET real_date = @day, real_date_source = @source
-    WHERE id = @id AND real_date_source IS NOT 'manual' AND @day < COALESCE(real_date, date)`);
+    WHERE id = @id AND @day < COALESCE(real_date, date)`);
   return {
     /** Estaba en una cartola descargada ese día (y a esa hora, si se sabe). */
     seen(id: number, day: string, at: string | null) {
@@ -60,6 +62,82 @@ export function seenStatements(db: DB) {
       realDate.run({ id, day, source });
     },
   };
+}
+
+/** Sábado o domingo. */
+const isWeekend = (day: string) => [0, 6].includes(new Date(`${day}T12:00:00Z`).getUTCDay());
+
+/** Día hábil anterior: para el lunes, el viernes. Los feriados no se conocen, así que cuentan como hábiles. */
+export function previousBusinessDay(day: string): string {
+  let d = addDays(day, -1);
+  while (isWeekend(d)) d = addDays(d, -1);
+  return d;
+}
+
+/** Lo que hace falta de un movimiento para saber entre qué días pudo pasar. */
+export interface Placeable {
+  account_id: number;
+  date: string;
+  real_date: string | null;
+  real_date_source: string | null;
+  first_seen_day: string | null;
+  first_seen_at: string | null;
+}
+
+/** Entre qué días pudo pasar un movimiento: los que se pueden elegir como fecha real. */
+export interface RealDateWindow {
+  min: string;
+  max: string;
+  /** La última descarga de su cuenta en que todavía no aparecía, si es la que pone el límite de abajo: pasó después. */
+  before: { day: string; at: string | null } | null;
+}
+
+/**
+ * Entre qué días pudo pasar cada movimiento, para corregir su fecha real a mano; null si no hay nada que elegir.
+ * - El banco pasa al día hábil siguiente lo que se hace de noche, en fin de semana o en feriado. Lo más temprano es
+ *   el día hábil anterior a su fecha: para un martes, el lunes; para un lunes, el viernes.
+ * - No aparecía en la descarga anterior de su cuenta, así que pasó después: ese mismo día, más tarde, o después.
+ * - Ya aparecía en la primera cartola que lo trajo, así que pasó ese día o antes; y tampoco después de una fecha
+ *   anterior que le haya dado el banco.
+ * Solo cuentan las descargas que traen todo lo que ya pasó en la cuenta: no una cartola consolidada de BancoEstado,
+ * que trae solo su período. Las tarjetas no tienen ventana: su fecha es la de la compra.
+ */
+export function realDateWindows(db: DB, movements: Placeable[]): Array<RealDateWindow | null> {
+  const cards = new Set((db.prepare("SELECT id FROM accounts WHERE kind = 'tarjeta_credito'").all() as Array<{ id: number }>).map((a) => a.id));
+  const downloads = new Map<number, Array<{ day: string; at: string | null; from: string | null }>>();
+  const rows = db
+    .prepare(
+      `SELECT account_id, balance_date AS day, observed_at AS at, from_date AS "from" FROM imports
+       WHERE kind = 'account' AND COALESCE(statement_kind, '') <> 'consolidated'`,
+    )
+    .all() as Array<{ account_id: number; day: string; at: string | null; from: string | null }>;
+  for (const r of rows) {
+    if (!downloads.has(r.account_id)) downloads.set(r.account_id, []);
+    downloads.get(r.account_id)!.push(r);
+  }
+
+  return movements.map((m) => {
+    if (cards.has(m.account_id)) return null;
+    const known = m.real_date_source === 'manual' ? m.date : (m.real_date ?? m.date);
+    const max = [m.date, m.first_seen_day ?? m.date, known].sort()[0];
+    let min = previousBusinessDay(m.date);
+    let before: RealDateWindow['before'] = null;
+    if (m.first_seen_day) {
+      // Las de un día anterior, o del mismo día y de antes, si se sabe la hora de las dos. Una que no cubre su fecha
+      // no dice nada: no lo habría traído aunque ya existiera.
+      const earlier = (downloads.get(m.account_id) ?? []).filter(
+        (d) =>
+          (d.from === null || d.from <= m.date) &&
+          (d.day < m.first_seen_day! || (d.day === m.first_seen_day && d.at !== null && m.first_seen_at !== null && d.at < m.first_seen_at)),
+      );
+      const last = earlier.sort((a, b) => a.day.localeCompare(b.day) || (a.at ?? '').localeCompare(b.at ?? '')).at(-1);
+      if (last && last.day >= min) {
+        min = last.day;
+        before = { day: last.day, at: last.at };
+      }
+    }
+    return min < max ? { min, max, before } : null;
+  });
 }
 
 /**

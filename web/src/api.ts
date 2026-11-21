@@ -147,10 +147,20 @@ export interface Movement {
   /** Fecha real: si es anterior a `date`, el banco lo pasó a un día posterior (ver seen.ts). */
   real_date: string | null;
   real_date_source: RealDateSource | null;
+  /** Solo en GET /api/movements: entre qué días pudo pasar, para corregir la fecha real; null si no hay qué elegir. */
+  real_date_window?: RealDateWindow | null;
 }
 
 /** De dónde sale la fecha real: la del banco, el día en que ya estaba en una cartola, o una corrección a mano. */
 export type RealDateSource = 'banco' | 'observada' | 'manual';
+
+/** Los días en que pudo pasar un movimiento (ver realDateWindows en server/src/domain/seen.ts). */
+export interface RealDateWindow {
+  min: string;
+  max: string;
+  /** La última descarga de su cuenta en que todavía no aparecía, si es la que pone el límite de abajo. */
+  before: { day: string; at: string | null } | null;
+}
 
 /**
  * Por qué fecha se muestra todo: 'real' (por defecto), el día en que pasó o en que ya aparecía en una cartola, así lo

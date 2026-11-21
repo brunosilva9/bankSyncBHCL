@@ -7,11 +7,13 @@ import { RangePicker } from '../components/RangePicker';
 import { useFetch, useShared } from '../data';
 import { clp, presetRange, shortDate, type DateRange } from '../format';
 import { MovedBadge } from '../components/MovedBadge';
+import { RealDateSelect } from '../components/RealDateSelect';
 import { groupPayroll } from '../payroll';
 import { navigate } from '../router';
 import { dayOf } from '../seen';
 
-type Edit = { categoryId?: number | null | 'auto'; label?: string | null };
+/** Edición de un movimiento: categoría, comentario o fecha real (uno de los días en que pudo pasar). */
+type Edit = { categoryId?: number | null | 'auto'; label?: string | null; realDate?: string };
 
 /** Sugerencia que aparece tras editar un movimiento: convertir la edición en regla. */
 interface Suggestion {
@@ -53,6 +55,7 @@ export function MovementsPage({ params }: { params: Record<string, string> }) {
               ...m,
               ...(edit.categoryId !== undefined && edit.categoryId !== 'auto' ? { category_id: edit.categoryId, category_source: 'manual' as const } : {}),
               ...(edit.label !== undefined ? { label: edit.label, label_source: edit.label ? ('manual' as const) : null } : {}),
+              ...(edit.realDate !== undefined ? { real_date: edit.realDate, real_date_source: 'manual' as const } : {}),
             }
           : m,
       ),
@@ -284,7 +287,8 @@ function MovementRow({ m, selected, onSelect, onEdit, nested }: { m: Movement; s
         <input type="checkbox" checked={selected} onChange={(e) => onSelect(e.target.checked)} aria-label="Seleccionar" />
       </td>
       <td className="nowrap">
-        {shortDate(dayOf(m, dates))}
+        {/* Por fecha real, se puede elegir otro de los días en que pudo pasar. */}
+        {dates === 'real' ? <RealDateSelect m={m} onChange={(realDate) => onEdit({ realDate })} /> : shortDate(dayOf(m, dates))}
         <MovedBadge items={[m]} />
       </td>
       <td className="nowrap small">{m.account_name}</td>
@@ -320,6 +324,8 @@ function BatchRows(props: {
   const allSelected = ids.every((id) => props.selected.has(id));
   const categoryIds = new Set(items.map((m) => m.category_id));
   const labels = new Set(items.map((m) => m.label ?? ''));
+  // La nómina entera cambia de día si todos sus pagos tienen la misma fecha real y los mismos días posibles.
+  const sameDays = new Set(items.map((m) => `${m.real_date}|${JSON.stringify(m.real_date_window ?? null)}`)).size === 1;
   return (
     <>
       <tr className="batch">
@@ -327,7 +333,7 @@ function BatchRows(props: {
           <input type="checkbox" checked={allSelected} onChange={(e) => props.onSelect(ids, e.target.checked)} aria-label="Seleccionar nómina" />
         </td>
         <td className="nowrap">
-          {shortDate(dayOf(first, dates))}
+          {dates === 'real' && sameDays ? <RealDateSelect m={first} onChange={(realDate) => props.onEditAll({ realDate })} /> : shortDate(dayOf(first, dates))}
           <MovedBadge items={items} />
         </td>
         <td className="nowrap small">{first.account_name}</td>
